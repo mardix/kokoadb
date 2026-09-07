@@ -12,7 +12,7 @@ const databaseSections = [
   { id: 'sqlite', label: 'SQLiteDB', short: 'S', description: 'Tables and SQL' },
   { id: 'query', label: 'Query', short: 'Q', description: 'Raw gateway requests' },
   { id: 'stats', label: 'Stats', short: 'T', description: 'Database activity' },
-  { id: 'admin', label: 'Database Admin', short: 'A', description: 'Database operations' }
+  { id: 'admin', label: 'Admin', short: 'A', description: 'Database operations' }
 ];
 
 const instanceSections = [
@@ -72,8 +72,8 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
               ))}
             </div>
           ) : null}
-          <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-slate-400 hover:text-emerald-300" title="Open KiDB Docs">Docs</a>
-          <span className="font-mono text-[9px] text-slate-500" title={`KiDB ${formatVersion(serviceInfo?.version)}`}>{compactVersion(serviceInfo?.version)}</span>
+          <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-slate-400 hover:text-emerald-300" title="Open Kokoadb Docs">Docs</a>
+          <span className="font-mono text-[9px] text-slate-500" title={`Kokoadb ${formatVersion(serviceInfo?.version)}`}>{compactVersion(serviceInfo?.version)}</span>
           <div className={`h-2.5 w-2.5 rounded-full ${statusDot(status.tone)}`} title={status.text} />
         </div>
       </aside>
@@ -84,8 +84,8 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
     <aside className="sidebar-shell">
       <div className="sidebar-border border-b p-4">
         <div className="flex items-start justify-between gap-3">
-          <button type="button" onClick={() => setPage('home')} className="text-left" aria-label="Open KiDB Home">
-            <div className="sidebar-brand text-2xl font-bold">KiDB</div>
+          <button type="button" onClick={() => setPage('home')} className="text-left" aria-label="Open Kokoadb Home">
+            <div className="sidebar-brand text-2xl font-bold">Kokoadb</div>
             <h1 className="mt-1.5 text-[11px] font-normal uppercase tracking-[0.16em] text-slate-400">Admin Console</h1>
           </button>
           <button type="button" onClick={onToggleCollapsed} className="rounded-md border border-white/10 px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/10 hover:text-white" title="Collapse Sidebar" aria-label="Collapse Sidebar">←</button>
@@ -107,7 +107,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
         {stage === 'primary' ? (
           <div className="space-y-2">
             <div className="sidebar-section">Start</div>
-            <SidebarItem title="Home" description="Welcome to KiDB" active={page === 'home'} onClick={() => setPage('home')} />
+            <SidebarItem title="Home" description="Welcome to Kokoa" active={page === 'home'} onClick={() => setPage('home')} />
             {page !== 'home' ? (
               <>
                 <div className="sidebar-section mt-5">Instance</div>
@@ -147,7 +147,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
           </div>
         ) : null}
         <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/10 hover:text-white">
-          <span>KiDB Docs</span>
+          <span>Kokoadb Docs</span>
           <span aria-hidden="true">↗</span>
         </a>
         <div className="mt-2 flex items-center justify-between px-2 text-[11px]"><span className="text-slate-500">Version</span><span className="font-mono text-slate-300">{formatVersion(serviceInfo?.version)}</span></div>

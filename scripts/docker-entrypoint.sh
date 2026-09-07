@@ -2,9 +2,9 @@
 set -eu
 
 # Env-file loading order:
-# 1) KONGODB_ENV_FILE (explicit path)
-# 2) /app/kongodb.env.$KONGODB_ENV (when KONGODB_ENV is set)
-# 3) /app/kongodb.env (default)
+# 1) KOKOADB_ENV_FILE (explicit path)
+# 2) /app/kokoadb.env.$KOKOADB_ENV
+# 3) /app/kokoadb.env
 load_env_file() {
   f="$1"
   if [ -n "$f" ] && [ -f "$f" ]; then
@@ -35,18 +35,27 @@ load_env_file() {
   return 1
 }
 
-if [ "${KONGODB_ENV_FILE:-}" != "" ]; then
-  load_env_file "${KONGODB_ENV_FILE}" || {
-    echo "KONGODB_ENV_FILE not found: ${KONGODB_ENV_FILE}" >&2
+ENV_FILE="${KOKOADB_ENV_FILE:-}"
+ENV_PROFILE="${KOKOADB_ENV:-}"
+
+if [ "$ENV_FILE" != "" ]; then
+  load_env_file "$ENV_FILE" || {
+    echo "KOKOADB_ENV_FILE not found: $ENV_FILE" >&2
     exit 1
   }
-elif [ "${KONGODB_ENV:-}" != "" ]; then
-  load_env_file "/app/kongodb.env.${KONGODB_ENV}" || {
-    echo "env profile file not found: /app/kongodb.env.${KONGODB_ENV}" >&2
+elif [ "$ENV_PROFILE" != "" ]; then
+  load_env_file "/app/kokoadb.env.${ENV_PROFILE}" || {
+    echo "env profile file not found: /app/kokoadb.env.${ENV_PROFILE}" >&2
     exit 1
   }
 else
-  load_env_file "/app/kongodb.env" || true
+  load_env_file "/app/kokoadb.env" || true
 fi
 
-exec sh -c 'KONGODB_PORT=${PORT:-${KONGODB_PORT:-8080}} kongo'
+# Container defaults apply after runtime values and profile files are considered.
+export KOKOADB_DATA_DIR="${KOKOADB_DATA_DIR:-/data}"
+export KOKOADB_BACKUP_PATH="${KOKOADB_BACKUP_PATH:-/data/backups}"
+export KOKOADB_EXPORT_PATH="${KOKOADB_EXPORT_PATH:-/data/exports}"
+export KOKOADB_DOCS_FILE="${KOKOADB_DOCS_FILE:-/app/DOCUMENTATION.md}"
+
+exec sh -c 'KOKOADB_PORT=${PORT:-${KOKOADB_PORT:-6543}} kokoadb'

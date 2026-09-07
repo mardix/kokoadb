@@ -5,15 +5,15 @@ import { originBase } from '../lib/format.js';
 const EMBEDDED_SETTINGS = embeddedServerSettings();
 const DEFAULT_SETTINGS = {
   name: 'Local',
-  serverUrl: EMBEDDED_SETTINGS?.serverUrl || 'http://localhost:8080',
+  serverUrl: EMBEDDED_SETTINGS?.serverUrl || 'http://localhost:6543',
   basePath: EMBEDDED_SETTINGS?.basePath ?? '/_/kdb',
   accessKey: '',
   db: 'projects/db01.main',
   namespace: ''
 };
-const CONNECTIONS_KEY = 'kongodb-admin-connections';
-const ACTIVE_CONNECTION_KEY = 'kongodb-admin-active-connection';
-const LEGACY_SETTINGS_KEY = 'kongodb-admin-settings';
+const CONNECTIONS_KEY = 'kokoadb-admin-connections';
+const ACTIVE_CONNECTION_KEY = 'kokoadb-admin-active-connection';
+const LEGACY_SETTINGS_KEY = 'kokoadb-admin-settings';
 
 const AdminContext = createContext(null);
 
@@ -178,7 +178,7 @@ export function AdminProvider({ children }) {
 
   function clearLocalData() {
     Object.keys(localStorage)
-      .filter((key) => key.startsWith('kongodb-') || key.startsWith('kongodb:'))
+      .filter((key) => key.startsWith('kokoadb-') || key.startsWith('kokoadb:'))
       .forEach((key) => localStorage.removeItem(key));
     setConnections([]);
     setActiveConnectionId('');
@@ -235,7 +235,7 @@ export function useAdmin() {
 }
 
 export function connectionScopedKey(connectionStorageKey, suffix) {
-  return `kongodb:${connectionStorageKey}:${suffix}`;
+  return `kokoadb:${connectionStorageKey}:${suffix}`;
 }
 
 function loadConnectionsState() {

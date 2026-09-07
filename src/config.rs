@@ -1,4 +1,4 @@
-//! Runtime configuration model and environment variable loading for Kongodb.
+//! Runtime configuration model and canonical/legacy environment variable loading.
 
 use serde::{Deserialize, Serialize};
 
@@ -244,21 +244,21 @@ pub enum WriteAckMode {
 
 impl KongodbConfig {
     pub fn from_env() -> Self {
-        let mode = match std::env::var("KONGODB_STORAGE_MODE")
-            .unwrap_or_else(|_| "local".to_string())
+        let mode = match env_value("KOKOADB_STORAGE_MODE")
+            .unwrap_or_else(|| "local".to_string())
             .as_str()
         {
             "s3" => StorageMode::S3,
             _ => StorageMode::Local,
         };
         let profile = RuntimeDefaults::from_env();
-        let worker_concurrency = env_usize("KONGODB_WORKER_CONCURRENCY")
+        let worker_concurrency = env_usize("KOKOADB_WORKER_CONCURRENCY")
             .unwrap_or(profile.worker_concurrency)
             .max(1);
-        let cache_ttl_secs = env_u64("KONGODB_CACHE_TTL_SECS").unwrap_or(60);
-        let metric_cache_ttl_secs = env_u64("KONGODB_METRIC_EVENTS_CACHE_TTL_SECS").unwrap_or(30);
-        let s3_topology = match std::env::var("KONGODB_S3_TOPOLOGY")
-            .unwrap_or_else(|_| "single".to_string())
+        let cache_ttl_secs = env_u64("KOKOADB_CACHE_TTL_SECS").unwrap_or(60);
+        let metric_cache_ttl_secs = env_u64("KOKOADB_METRIC_EVENTS_CACHE_TTL_SECS").unwrap_or(30);
+        let s3_topology = match env_value("KOKOADB_S3_TOPOLOGY")
+            .unwrap_or_else(|| "single".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str()
@@ -266,36 +266,35 @@ impl KongodbConfig {
             "multi" => S3Topology::Multi,
             _ => S3Topology::Single,
         };
-        let remote_sync_interval_secs = env_u64("KONGODB_REMOTE_SYNC_INTERVAL_SECS").unwrap_or(10);
+        let remote_sync_interval_secs = env_u64("KOKOADB_REMOTE_SYNC_INTERVAL_SECS").unwrap_or(10);
         let remote_sync_enabled =
             matches!(s3_topology, S3Topology::Multi) && remote_sync_interval_secs > 0;
-        let job_retention_days = env_u64("KONGODB_JOB_RETENTION_DAYS").unwrap_or(30);
+        let job_retention_days = env_u64("KOKOADB_JOB_RETENTION_DAYS").unwrap_or(30);
         let backup_path =
-            env_nonempty("KONGODB_BACKUP_PATH").unwrap_or_else(|| "./backups".to_string());
-        let backup_every_secs = env_u64("KONGODB_BACKUP_EVERY_SECS").unwrap_or(0);
+            env_nonempty("KOKOADB_BACKUP_PATH").unwrap_or_else(|| "./backups".to_string());
+        let backup_every_secs = env_u64("KOKOADB_BACKUP_EVERY_SECS").unwrap_or(0);
         let backup_is_s3 = backup_path.starts_with("s3://");
         let export_path =
-            env_nonempty("KONGODB_EXPORT_PATH").unwrap_or_else(|| "./exports".to_string());
-        let write_mode = std::env::var("KONGODB_WRITE_MODE")
-            .unwrap_or_else(|_| "committed".to_string())
+            env_nonempty("KOKOADB_EXPORT_PATH").unwrap_or_else(|| "./exports".to_string());
+        let write_mode = env_value("KOKOADB_WRITE_MODE")
+            .unwrap_or_else(|| "committed".to_string())
             .to_ascii_lowercase();
 
         Self {
             server: ServerConfig {
                 host: [0, 0, 0, 0],
-                port: env_usize("KONGODB_PORT")
+                port: env_usize("KOKOADB_PORT")
                     .and_then(|v| u16::try_from(v).ok())
-                    .unwrap_or(8080),
+                    .unwrap_or(6543),
                 base_path: normalize_base_path(
-                    std::env::var("KONGODB_BASE_PATH").unwrap_or_else(|_| "/_/kdb".to_string()),
+                    env_value("KOKOADB_BASE_PATH").unwrap_or_else(|| "/_/kdb".to_string()),
                 ),
-                admin_ui_enabled: env_bool("KONGODB_ADMIN_UI_ENABLED").unwrap_or(true),
+                admin_ui_enabled: env_bool("KOKOADB_ADMIN_UI_ENABLED").unwrap_or(true),
                 admin_ui_dir: "admin-ui/dist".to_string(),
-                docs_enabled: env_bool("KONGODB_DOCS_ENABLED").unwrap_or(true),
-                docs_file: env_nonempty("KONGODB_DOCS_FILE")
+                docs_enabled: env_bool("KOKOADB_DOCS_ENABLED").unwrap_or(true),
+                docs_file: env_nonempty("KOKOADB_DOCS_FILE")
                     .unwrap_or_else(|| "DOCUMENTATION.md".to_string()),
-                cors_allowed_origins: std::env::var("KONGODB_CORS_ALLOWED_ORIGINS")
-                    .ok()
+                cors_allowed_origins: env_value("KOKOADB_CORS_ALLOWED_ORIGINS")
                     .map(|v| {
                         v.split(',')
                             .map(str::trim)
@@ -304,34 +303,32 @@ impl KongodbConfig {
                             .collect::<Vec<String>>()
                     })
                     .unwrap_or_default(),
-                max_request_bytes: env_usize("KONGODB_MAX_REQUEST_BYTES")
+                max_request_bytes: env_usize("KOKOADB_MAX_REQUEST_BYTES")
                     .unwrap_or(16 * 1024 * 1024),
-                operation_timeout_ms: env_u64("KONGODB_OPERATION_TIMEOUT_MS").unwrap_or(30_000),
+                operation_timeout_ms: env_u64("KOKOADB_OPERATION_TIMEOUT_MS").unwrap_or(30_000),
             },
             auth: AuthConfig {
-                mode: std::env::var("KONGODB_AUTH_MODE")
-                    .unwrap_or_else(|_| "access_key".to_string())
+                mode: env_value("KOKOADB_AUTH_MODE")
+                    .unwrap_or_else(|| "access_key".to_string())
                     .trim()
                     .to_ascii_lowercase(),
-                access_key: env_nonempty("KONGODB_ACCESS_KEY"),
+                access_key: env_nonempty("KOKOADB_ACCESS_KEY"),
             },
             storage: StorageConfig {
                 mode,
-                data_dir: std::env::var("KONGODB_DATA_DIR")
-                    .unwrap_or_else(|_| "./data".to_string()),
+                data_dir: env_value("KOKOADB_DATA_DIR").unwrap_or_else(|| "./data".to_string()),
                 s3: Some(S3Config {
-                    bucket: std::env::var("KONGODB_S3_BUCKET").unwrap_or_default(),
-                    prefix: std::env::var("KONGODB_S3_PREFIX")
-                        .unwrap_or_else(|_| "data/kongodb/data".to_string()),
-                    region: std::env::var("KONGODB_S3_REGION")
-                        .unwrap_or_else(|_| "us-east-1".to_string()),
-                    endpoint: env_nonempty("KONGODB_S3_ENDPOINT"),
-                    credentials: env_s3_credentials("KONGODB_S3"),
+                    bucket: env_value("KOKOADB_S3_BUCKET").unwrap_or_default(),
+                    prefix: env_value("KOKOADB_S3_PREFIX")
+                        .unwrap_or_else(|| "data/kongodb/data".to_string()),
+                    region: env_value("KOKOADB_S3_REGION")
+                        .unwrap_or_else(|| "us-east-1".to_string()),
+                    endpoint: env_nonempty("KOKOADB_S3_ENDPOINT"),
+                    credentials: env_s3_credentials("KOKOADB_S3"),
                     lease_duration_secs: 30,
                     segment_max_bytes: 8 * 1024 * 1024,
                     flush_interval_secs: 2,
-                    preload_dbs: std::env::var("KONGODB_PRELOAD_DBS")
-                        .ok()
+                    preload_dbs: env_value("KOKOADB_PRELOAD_DBS")
                         .map(|v| {
                             v.split(',')
                                 .map(str::trim)
@@ -340,14 +337,14 @@ impl KongodbConfig {
                                 .collect::<Vec<String>>()
                         })
                         .unwrap_or_default(),
-                    snapshot_every_writes: env_u64("KONGODB_SNAPSHOT_EVERY_WRITES").unwrap_or(100),
+                    snapshot_every_writes: env_u64("KOKOADB_SNAPSHOT_EVERY_WRITES").unwrap_or(100),
                     snapshot_max_count: 64,
-                    snapshot_max_age_days: env_u64("KONGODB_SNAPSHOT_RETENTION_DAYS").unwrap_or(14),
+                    snapshot_max_age_days: env_u64("KOKOADB_SNAPSHOT_RETENTION_DAYS").unwrap_or(14),
                     topology: s3_topology,
                     remote_sync_enabled,
                     remote_sync_interval_secs,
-                    replication_mode: match std::env::var("KONGODB_REPLICATION_MODE")
-                        .unwrap_or_else(|_| "async".to_string())
+                    replication_mode: match env_value("KOKOADB_REPLICATION_MODE")
+                        .unwrap_or_else(|| "async".to_string())
                         .as_str()
                     {
                         "sync" => ReplicationMode::Sync,
@@ -360,12 +357,12 @@ impl KongodbConfig {
             reaper: ReaperConfig {
                 interval_secs: 60,
                 max_concurrency: worker_concurrency,
-                __kdb_archive_ttl_secs: env_u64("KONGODB_ARCHIVE_TTL_SECS"),
+                __kdb_archive_ttl_secs: env_u64("KOKOADB_ARCHIVE_TTL_SECS"),
                 temp_cleanup_interval_secs: 300,
                 temp_cleanup_older_than_secs: 600,
             },
             delete: DeleteConfig {
-                default_ttl_secs: env_u64("KONGODB_DELETE_DEFAULT_TTL_SECS"),
+                default_ttl_secs: env_u64("KOKOADB_DELETE_DEFAULT_TTL_SECS"),
             },
             backup: BackupConfig {
                 mode: if backup_is_s3 {
@@ -380,7 +377,7 @@ impl KongodbConfig {
                 min_writes_since_backup: 1,
                 max_staleness_secs: backup_every_secs,
                 max_count: 200,
-                max_age_days: env_u64("KONGODB_BACKUP_RETENTION_DAYS").unwrap_or(30),
+                max_age_days: env_u64("KOKOADB_BACKUP_RETENTION_DAYS").unwrap_or(30),
                 local_path: backup_path.clone(),
                 s3_path: backup_is_s3.then_some(backup_path),
             },
@@ -390,27 +387,27 @@ impl KongodbConfig {
                 max_entries: profile.cache_max_entries,
             },
             response: ResponseConfig {
-                include_system_timestamps: env_bool("KONGODB_RESPONSE_INCLUDE_SYSTEM_TIMESTAMPS")
+                include_system_timestamps: env_bool("KOKOADB_RESPONSE_INCLUDE_SYSTEM_TIMESTAMPS")
                     .unwrap_or(true),
-                include_namespace: env_bool("KONGODB_RESPONSE_INCLUDE_NAMESPACE").unwrap_or(false),
+                include_namespace: env_bool("KOKOADB_RESPONSE_INCLUDE_NAMESPACE").unwrap_or(false),
             },
             json_storage: JsonStorageConfig {
                 format: JsonStorageFormat::Jsonb,
             },
             query: QueryConfig {
-                default_limit: env_usize("KONGODB_QUERY_DEFAULT_LIMIT").unwrap_or(50),
-                multi_max_queries: env_usize("KONGODB_QUERY_MULTI_MAX_QUERIES")
+                default_limit: env_usize("KOKOADB_QUERY_DEFAULT_LIMIT").unwrap_or(50),
+                multi_max_queries: env_usize("KOKOADB_QUERY_MULTI_MAX_QUERIES")
                     .unwrap_or(20)
                     .max(1),
             },
             query_lookup: QueryLookupConfig {
-                max_depth: env_usize("KONGODB_QUERY_LOOKUP_MAX_DEPTH").unwrap_or(3),
+                max_depth: env_usize("KOKOADB_QUERY_LOOKUP_MAX_DEPTH").unwrap_or(3),
                 uncapped_override_enabled: env_bool(
-                    "KONGODB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED",
+                    "KOKOADB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED",
                 )
                 .unwrap_or(false),
                 max_concurrency: profile.lookup_concurrency,
-                default_limit: env_usize("KONGODB_QUERY_DEFAULT_LIMIT").unwrap_or(50),
+                default_limit: env_usize("KOKOADB_QUERY_DEFAULT_LIMIT").unwrap_or(50),
             },
             auto_index: AutoIndexConfig {
                 interval_secs: 60,
@@ -432,15 +429,15 @@ impl KongodbConfig {
                 cache_enabled: metric_cache_ttl_secs > 0,
                 cache_ttl_secs: metric_cache_ttl_secs,
                 insert_batch_size: profile.metric_insert_batch_size,
-                retention_days: env_u64("KONGODB_METRIC_EVENTS_RETENTION_DAYS"),
+                retention_days: env_u64("KOKOADB_METRIC_EVENTS_RETENTION_DAYS"),
                 query_default_limit: profile.metric_query_default_limit,
                 query_max_limit: profile.metric_query_max_limit,
             },
             system_catalog: SystemCatalogConfig {
-                retention_days: env_u64("KONGODB_SYSTEM_RETENTION_DAYS").unwrap_or(14),
+                retention_days: env_u64("KOKOADB_SYSTEM_RETENTION_DAYS").unwrap_or(14),
             },
             mutation: MutationConfig {
-                strict_mutation_operators: env_bool("KONGODB_STRICT_MUTATIONS_OPERATORS")
+                strict_mutation_operators: env_bool("KOKOADB_STRICT_MUTATIONS_OPERATORS")
                     .unwrap_or(false),
             },
             write_queue: WriteQueueConfig {
@@ -454,7 +451,7 @@ impl KongodbConfig {
                 idle_secs: 300,
             },
             runtime: RuntimeConfig {
-                max_active_dbs: env_usize("KONGODB_MAX_ACTIVE_DBS")
+                max_active_dbs: env_usize("KOKOADB_MAX_ACTIVE_DBS")
                     .unwrap_or(profile.max_active_dbs),
                 db_idle_close_secs: profile.db_idle_close_secs,
                 job_worker_concurrency: worker_concurrency,
@@ -480,8 +477,8 @@ struct RuntimeDefaults {
 
 impl RuntimeDefaults {
     fn from_env() -> Self {
-        match std::env::var("KONGODB_RUNTIME_PROFILE")
-            .unwrap_or_else(|_| "balanced".to_string())
+        match env_value("KOKOADB_RUNTIME_PROFILE")
+            .unwrap_or_else(|| "balanced".to_string())
             .to_ascii_lowercase()
             .as_str()
         {
@@ -526,24 +523,25 @@ impl RuntimeDefaults {
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
+    env_value(name)
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
 
 fn env_bool(name: &str) -> Option<bool> {
-    std::env::var(name)
-        .ok()
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    env_value(name).map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 fn env_u64(name: &str) -> Option<u64> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
+    env_value(name).and_then(|v| v.parse().ok())
 }
 
 fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
+    env_value(name).and_then(|v| v.parse().ok())
+}
+
+pub(crate) fn env_value(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 fn normalize_base_path(raw: String) -> String {
@@ -564,8 +562,8 @@ fn normalize_base_path(raw: String) -> String {
 }
 
 fn env_s3_credentials(prefix: &str) -> Option<S3Credentials> {
-    let access_key = std::env::var(format!("{prefix}_ACCESS_KEY")).ok();
-    let secret_key = std::env::var(format!("{prefix}_SECRET_KEY")).ok();
+    let access_key = env_value(&format!("{prefix}_ACCESS_KEY"));
+    let secret_key = env_value(&format!("{prefix}_SECRET_KEY"));
     match (access_key, secret_key) {
         (Some(access_key), Some(secret_key))
             if !access_key.trim().is_empty() && !secret_key.trim().is_empty() =>
@@ -573,7 +571,7 @@ fn env_s3_credentials(prefix: &str) -> Option<S3Credentials> {
             Some(S3Credentials {
                 access_key,
                 secret_key,
-                session_token: std::env::var(format!("{prefix}_SESSION_TOKEN")).ok(),
+                session_token: env_value(&format!("{prefix}_SESSION_TOKEN")),
             })
         }
         _ => None,

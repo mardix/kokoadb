@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::api::router::build_router;
 use crate::config::{
     BackupMode, JsonStorageFormat, KongodbConfig, ReplicationMode, S3Topology, StorageMode,
-    WriteAckMode,
+    WriteAckMode, env_value,
 };
 use crate::state::AppState;
 use crate::storage::manager::MultiDbManager;
@@ -26,11 +26,11 @@ use crate::storage::system_catalog::SystemCatalog;
 
 #[tokio::main]
 async fn main() {
-    if let Ok(raw) = std::env::var("KONGODB_S3_TOPOLOGY") {
+    if let Some(raw) = env_value("KOKOADB_S3_TOPOLOGY") {
         let normalized = raw.trim().to_ascii_lowercase();
         if normalized != "single" && normalized != "multi" {
             eprintln!(
-                "startup error: KONGODB_S3_TOPOLOGY must be single|multi, got: {}",
+                "startup error: KOKOADB_S3_TOPOLOGY must be single|multi, got: {}",
                 raw.trim()
             );
             std::process::exit(2);
@@ -42,19 +42,19 @@ async fn main() {
             Some(key) => Some(key),
             None => {
                 eprintln!(
-                    "startup error: KONGODB_ACCESS_KEY is required when KONGODB_AUTH_MODE=access_key"
+                    "startup error: KOKOADB_ACCESS_KEY is required when KOKOADB_AUTH_MODE=access_key"
                 );
                 std::process::exit(2);
             }
         },
         "none" => None,
         other => {
-            eprintln!("startup error: KONGODB_AUTH_MODE must be access_key|none, got: {other}");
+            eprintln!("startup error: KOKOADB_AUTH_MODE must be access_key|none, got: {other}");
             std::process::exit(2);
         }
     };
     if matches!(cfg.backup.mode, BackupMode::S3) && !matches!(cfg.storage.mode, StorageMode::S3) {
-        eprintln!("startup error: an s3:// KONGODB_BACKUP_PATH requires KONGODB_STORAGE_MODE=s3");
+        eprintln!("startup error: an s3:// KOKOADB_BACKUP_PATH requires KOKOADB_STORAGE_MODE=s3");
         std::process::exit(2);
     }
     let mode = cfg.storage.mode.clone();
@@ -585,7 +585,7 @@ async fn main() {
     let app = build_router(app_state, cfg.server.max_request_bytes);
     let addr = SocketAddr::from((cfg.server.host, cfg.server.port));
 
-    println!("Kongodb listening on {}", addr);
+    println!("Kokoadb listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

@@ -127,7 +127,7 @@ async fn require_browser_auth(
             let mut response = err.into_response();
             response.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
-                HeaderValue::from_static("Basic realm=\"Kongodb\", charset=\"UTF-8\""),
+                HeaderValue::from_static("Basic realm=\"Kokoadb\", charset=\"UTF-8\""),
             );
             response
         }

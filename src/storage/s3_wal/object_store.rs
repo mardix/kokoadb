@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use aws_credential_types::{Credentials, provider::SharedCredentialsProvider};
-use aws_sdk_s3::{Client, config::Region, error::ProvideErrorMetadata};
+use aws_sdk_s3::{
+    Client, config::Region, error::ProvideErrorMetadata, presigning::PresigningConfig,
+};
 use tokio::time::{Duration, sleep};
 
 use crate::{
@@ -128,6 +130,101 @@ impl AwsS3ObjectStore {
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty());
         Ok(picked)
+    }
+
+    pub async fn presign_put(
+        &self,
+        key: &str,
+        content_type: &str,
+        source_hash: Option<&str>,
+        expires_in_secs: u64,
+    ) -> AppResult<(String, Vec<(String, String)>)> {
+        let object_key = self.object_key(key);
+        let mut request = self
+            .client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(object_key.as_str())
+            .content_type(content_type);
+        if let Some(source_hash) = source_hash {
+            request = request.metadata("source-hash", source_hash);
+        }
+        let config = PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
+            .map_err(|e| AppError::BadRequest(format!("invalid upload URL expiry: {e}")))?;
+        let signed = request.presigned(config).await.map_err(|e| {
+            AppError::Internal(format!(
+                "s3 presign put failed: bucket={} key={} err={e}",
+                self.bucket, object_key
+            ))
+        })?;
+        let headers = signed
+            .headers()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        Ok((signed.uri().to_string(), headers))
+    }
+
+    pub async fn head_metadata(&self, key: &str) -> AppResult<Option<(i64, Option<String>)>> {
+        let object_key = self.object_key(key);
+        let out = match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(object_key.as_str())
+            .send()
+            .await
+        {
+            Ok(value) => value,
+            Err(aws_sdk_s3::error::SdkError::ServiceError(service_error)) => {
+                let (code, message) = Self::error_code_message(service_error.err());
+                if code == "NotFound" || code == "NoSuchKey" || message.contains("404") {
+                    return Ok(None);
+                }
+                return Err(AppError::Internal(format!(
+                    "s3 head_object failed: code={code} message={message} bucket={} key={}",
+                    self.bucket, object_key
+                )));
+            }
+            Err(error) => {
+                return Err(AppError::Internal(format!(
+                    "s3 head_object transport/config error: bucket={} key={} err={error}",
+                    self.bucket, object_key
+                )));
+            }
+        };
+        Ok(Some((
+            out.content_length.unwrap_or(0),
+            out.content_type.map(|value| value.to_string()),
+        )))
+    }
+
+    pub async fn presign_get(
+        &self,
+        key: &str,
+        filename: &str,
+        content_type: &str,
+        expires_in_secs: u64,
+    ) -> AppResult<String> {
+        let object_key = self.object_key(key);
+        let disposition_filename = filename.replace(['"', '\r', '\n'], "_");
+        let request = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(object_key.as_str())
+            .response_content_disposition(format!(
+                "attachment; filename=\"{disposition_filename}\""
+            ))
+            .response_content_type(content_type);
+        let config = PresigningConfig::expires_in(Duration::from_secs(expires_in_secs))
+            .map_err(|e| AppError::BadRequest(format!("invalid download URL expiry: {e}")))?;
+        let signed = request.presigned(config).await.map_err(|e| {
+            AppError::Internal(format!(
+                "s3 presign get failed: bucket={} key={} err={e}",
+                self.bucket, object_key
+            ))
+        })?;
+        Ok(signed.uri().to_string())
     }
 
     pub async fn get_range(&self, key: &str, start: usize) -> AppResult<Option<(Vec<u8>, String)>> {

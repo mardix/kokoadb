@@ -264,9 +264,9 @@ fn basic_auth_password(headers: &HeaderMap) -> Option<String> {
         .strip_prefix("Basic ")?;
     let decoded = STANDARD.decode(encoded).ok()?;
     let decoded = std::str::from_utf8(&decoded).ok()?;
-    decoded
-        .split_once(':')
-        .and_then(|(username, password)| (username == "kongodb").then(|| password.to_string()))
+    decoded.split_once(':').and_then(|(username, password)| {
+        matches!(username, "kokoadb" | "kongodb").then(|| password.to_string())
+    })
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -283,7 +283,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub async fn ping() -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
-        "service": "kongo",
+        "service": "kokoadb",
         "version": env!("CARGO_PKG_VERSION")
     }))
 }
@@ -444,7 +444,7 @@ pub async fn docs(State(state): State<AppState>) -> AppResult<Html<String>> {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KiDB {version} Documentation</title>
+  <title>Kokoadb {version} Documentation</title>
   <style>
     * {{
       box-sizing: border-box;
@@ -755,7 +755,7 @@ pub async fn docs(State(state): State<AppState>) -> AppResult<Html<String>> {
   <div class="docs-layout">
     <aside class="docs-sidebar">
       <div class="docs-sidebar-header">
-        <div class="docs-sidebar-title">KiDB Documentation</div>
+        <div class="docs-sidebar-title">Kokoadb Documentation</div>
         <p class="docs-sidebar-subtitle">Contents</p>
         <span class="docs-version">Version {version}</span>
       </div>
@@ -778,7 +778,7 @@ pub async fn meta_operations(
     let gateway_path = format!("{}/gateway", state.base_path);
     let payload = format!(
         r#"{{
-  "service":"kongodb",
+  "service":"kokoadb",
   "version":"{}",
   "endpoint":"{}",
   "operations":{{
@@ -857,18 +857,24 @@ pub async fn meta_operations(
     "user_query":{{"writes":false,"required":[],"optional":["search|q","status","email","username","filter(Filter Operators on data.*)","limit","offset","page","per_page"],"description":"List/query identity users with pagination and application-data filtering"}},
     "user_get_details":{{"writes":false,"required":["user_id|id|email|username"],"optional":[],"description":"Fetch one identity user with login methods, providers, and recent identity events"}},
     "user_update":{{"writes":true,"required":["user_id|id"],"optional":["email","username","phone","first_name","last_name","profile_photo","requires_password_change","email_verified_at","phone_verified_at","data"],"description":"Update identity user profile metadata and app data; does not authenticate"}},
+    "user_update_password":{{"writes":true,"required":["user_id|id","password_hash","password_algo"],"optional":["requires_password_change"],"description":"Replace an existing user's application-generated password hash and algorithm atomically; never returns the hash"}},
     "user_update_status":{{"writes":true,"required":["user_id|id","status"],"optional":["status_reason","status_expires_at|status_expires_in","status_next","status_next_reason","changed_by"],"description":"Update app-defined user status and optionally schedule a future transition; logs an identity event"}},
     "user_delete":{{"writes":true,"required":["user_id|id"],"optional":["purge","status_reason"],"description":"Soft delete user by default and revoke active tokens. purge=true hard-deletes user, providers, tokens, and events"}},
     "user_create_token":{{"writes":true,"required":["user_id|id","kind","token_hash"],"optional":["expires_at|expires_in","allow_multi(default=false)","data"],"description":"Store an app-generated token hash. allow_multi=false revokes active tokens for the same user+kind before insert"}},
+    "user_get_token":{{"writes":false,"required":["token_id|id OR token_hash+kind"],"optional":[],"description":"Read token metadata and derived active/used/revoked/expired status without exposing token_hash"}},
+    "user_consume_token":{{"writes":true,"required":["token_hash","kind"],"optional":[],"description":"Atomically mark one active, unexpired token as used. Replays and unavailable tokens return consumed=false without revealing why"}},
+    "user_revoke_token":{{"writes":true,"required":["token_id|id OR token_hash+kind OR user_id"],"optional":["kind(with user_id)"],"description":"Atomically revoke active token hashes selected by token id, token hash+kind, or user id with an optional kind"}},
     "user_link_provider":{{"writes":true,"required":["user_id|id","provider","provider_user_id"],"optional":["email","data"],"description":"Link an OAuth/custom provider identity to a local user"}},
     "user_unlink_provider":{{"writes":true,"required":["provider","provider_user_id"],"optional":["user_id|id"],"description":"Unlink one provider identity; user_id makes the unlink strict when provided"}},
-    "file_create":{{"writes":true,"required":["storage_backend","storage_path"],"optional":["id(non-empty string; generated as dashless uuid4 when omitted)","bucket(default=default)","filename","content_type","size_bytes","sha256","status(default=active)","owner_type","owner_id","metadata","uploaded_at(default=now)","expires_at"],"description":"Create file/object metadata only. Kongodb does not upload, download, or delete file bytes"}},
+    "file_create":{{"writes":true,"required":["storage_backend","storage_path"],"optional":["id(non-empty string; generated as dashless uuid4 when omitted)","bucket(default=default)","filename","content_type","size_bytes","sha256","status(default=active)","owner_type","owner_id","metadata","uploaded_at(default=now)","expires_at"],"description":"Create file/object metadata only. Kokoadb does not upload, download, or delete file bytes"}},
     "file_get":{{"writes":false,"required":["id"],"optional":[],"description":"Fetch one file metadata row by id"}},
     "file_query":{{"writes":false,"required":[],"optional":["bucket","status","owner_type","owner_id","storage_backend","content_type","search|q","filter(Filter Operators on metadata.*)","limit","offset","page","per_page"],"description":"List/query file metadata rows with pagination and JSON metadata filtering"}},
     "file_update":{{"writes":true,"required":["id"],"optional":["bucket","storage_backend","storage_path","filename","content_type","size_bytes","sha256","status","owner_type","owner_id","metadata","uploaded_at","expires_at"],"description":"Update mutable file metadata only; does not move object bytes"}},
     "file_delete":{{"writes":true,"required":["id"],"optional":["purge"],"description":"Soft delete file metadata by default (status=deleted). purge=true hard-deletes metadata row only"}},
     "sql_execute":{{"writes":true,"required":["sql"],"optional":["params","commit"],"description":"Config-gated direct SQL execution. Supports a single SELECT/WITH/EXPLAIN/INSERT/UPDATE/DELETE/REPLACE statement, plus CREATE TABLE, CREATE INDEX, DROP INDEX, and ALTER TABLE ... ADD COLUMN for non-__kdb_* objects; write statements follow normal commit=false accepted-ack queue behavior"}},
     "export_jsonl":{{"writes":true,"required":[],"optional":["target_path","compress(default=true)","include_system_timestamps(default=true)","namespace|scope=all","filter","sort(object|string)","limit","offset","page","per_page","fields","exclude_fields","include_archive","archive_only"],"description":"Create async JSONL export job and return job_id + resolved target_path"}},
+    "create_import_upload_url":{{"writes":false,"required":["filename(.jsonl|.jsonl.zst)"],"optional":["content_type(default=application/x-ndjson)","source_hash","expires_in(60..3600, default=900)"],"description":"Create a short-lived presigned S3 PUT URL for a JSONL import source. Upload directly, then pass the returned source_path to import_jsonl"}},
+    "create_download_url":{{"writes":false,"required":["type(export|backup|snapshot)","job_id(export)|backup_id(backup)|snapshot_id|latest(snapshot)"],"optional":["expires_in(60..3600, default=300)"],"description":"Resolve a completed cataloged S3 artifact, verify it exists, and return a short-lived presigned GET URL. Arbitrary object paths are not accepted"}},
     "import_jsonl":{{"writes":true,"required":["namespace","source_path"],"optional":["source_hash","drop_keys","on_conflict(error|skip|replace|merge)","ignore_input_id","allow_system_timestamps","batch_size","resumable"],"description":"Create async JSONL import job and return job_id. Background worker streams batches into namespace"}},
     "get_job":{{"writes":false,"required":["job_id"],"optional":["job_type(import_jsonl|export_jsonl|create_backup|reindex_fts|drop_fts_index|vacuum_db|recompute_stats|replication)"],"description":"Get one async job by id"}},
     "list_jobs":{{"writes":false,"required":[],"optional":["job_type(import_jsonl|export_jsonl|create_backup|reindex_fts|drop_fts_index|vacuum_db|recompute_stats|replication)","status","limit","offset"],"description":"List async jobs across supported job types"}},
@@ -893,7 +899,7 @@ mod docs_tests {
     #[test]
     fn docs_renderer_builds_toc_and_heading_anchors() {
         let (body, toc) = render_docs_markdown(
-            "# KiDB\n\n## API Surface\n\n### `query` operation\n\n## API Surface\n",
+            "# Kokoadb\n\n## API Surface\n\n### `query` operation\n\n## API Surface\n",
         );
 
         assert!(body.contains("<h2 id=\"api-surface\">API Surface</h2>"));

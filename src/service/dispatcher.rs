@@ -146,6 +146,9 @@ async fn dispatch_inner(
     if req.operation == "compact_wal" {
         return heap_future(compact_wal(state, db_path, req)).await;
     }
+    if req.operation == "create_import_upload_url" {
+        return heap_future(create_import_upload_url(state, db_path, req)).await;
+    }
     let is_write_request = request_is_write(&req);
     if !from_write_worker && is_write_request {
         match requested_ack_mode {
@@ -284,6 +287,7 @@ async fn dispatch_inner(
         "aggregate" => heap_future(aggregate(state, db_path, &conn, req)).await,
         "query" => query(state, db_path, &conn, req).await,
         "multi_query" => multi_query(state, db_path, &conn, req).await,
+        "create_download_url" => heap_future(create_download_url(state, db_path, &conn, req)).await,
         "export_jsonl" => heap_future(export_jsonl(state, db_path, &conn, req)).await,
         "import_jsonl" => heap_future(import_jsonl(state, db_path, &conn, req)).await,
         "metrics_ingest" => heap_future(metrics_ingest(state, db_path, &conn, req)).await,
@@ -296,9 +300,13 @@ async fn dispatch_inner(
         "user_query" => heap_future(user_query(&conn, req)).await,
         "user_get_details" => heap_future(user_get_details(&conn, req)).await,
         "user_update" => heap_future(user_update(state, &conn, req)).await,
+        "user_update_password" => heap_future(user_update_password(&conn, req)).await,
         "user_update_status" => heap_future(user_update_status(&conn, req)).await,
         "user_delete" => heap_future(user_delete(&conn, req)).await,
         "user_create_token" => heap_future(user_create_token(state, &conn, req)).await,
+        "user_get_token" => heap_future(user_get_token(&conn, req)).await,
+        "user_consume_token" => heap_future(user_consume_token(&conn, req)).await,
+        "user_revoke_token" => heap_future(user_revoke_token(&conn, req)).await,
         "user_link_provider" => heap_future(user_link_provider(state, &conn, req)).await,
         "user_unlink_provider" => heap_future(user_unlink_provider(&conn, req)).await,
         "file_create" => heap_future(file_create(state, &conn, req)).await,

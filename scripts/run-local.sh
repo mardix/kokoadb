@@ -6,12 +6,12 @@ cd "$ROOT_DIR"
 
 # Load environment file.
 # Priority:
-# 1) kongodb.env.${KONGODB_ENV} if KONGODB_ENV is set
-# 2) kongodb.env
-export KONGODB_ENV="${KONGODB_ENV:-local}"
-ENV_FILE="$ROOT_DIR/kongodb.env"
-if [[ -f "$ROOT_DIR/kongodb.env.${KONGODB_ENV}" ]]; then
-  ENV_FILE="$ROOT_DIR/kongodb.env.${KONGODB_ENV}"
+# 1) kokoadb.env.${KOKOADB_ENV} if KOKOADB_ENV is set
+# 2) kokoadb.env
+export KOKOADB_ENV="${KOKOADB_ENV:-local}"
+ENV_FILE="$ROOT_DIR/kokoadb.env"
+if [[ -f "$ROOT_DIR/kokoadb.env.${KOKOADB_ENV}" ]]; then
+  ENV_FILE="$ROOT_DIR/kokoadb.env.${KOKOADB_ENV}"
 fi
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -21,23 +21,23 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-export KONGODB_STORAGE_MODE="${KONGODB_STORAGE_MODE:-local}"
-export KONGODB_PORT="${KONGODB_PORT:-8080}"
-export KONGODB_DATA_DIR="${KONGODB_DATA_DIR:-./data_local}"
-export KONGODB_BASE_PATH="${KONGODB_BASE_PATH:-}"
-export KONGODB_BACKUP_PATH="${KONGODB_BACKUP_PATH:-./backups}"
-export KONGODB_AUTH_MODE="none"
+export KOKOADB_STORAGE_MODE="${KOKOADB_STORAGE_MODE:-local}"
+export KOKOADB_PORT="${KOKOADB_PORT:-6543}"
+export KOKOADB_DATA_DIR="${KOKOADB_DATA_DIR:-./data_local}"
+export KOKOADB_BASE_PATH="${KOKOADB_BASE_PATH:-}"
+export KOKOADB_BACKUP_PATH="${KOKOADB_BACKUP_PATH:-./backups}"
+export KOKOADB_AUTH_MODE="none"
 
 # Optional archive cleanup TTL. Uncomment to force __kdb_archive retention.
-# export KONGODB_ARCHIVE_TTL_SECS="${KONGODB_ARCHIVE_TTL_SECS:-86400}"
+# export KOKOADB_ARCHIVE_TTL_SECS="${KOKOADB_ARCHIVE_TTL_SECS:-86400}"
 
-echo "Starting Kongodb"
-echo "  env:   $KONGODB_ENV"
-echo "  mode:  $KONGODB_STORAGE_MODE"
-echo "  port:  $KONGODB_PORT"
-echo "  base path: ${KONGODB_BASE_PATH:-<none>}"
-echo "  gateway path: ${KONGODB_BASE_PATH}/gateway"
-echo "  data:  $KONGODB_DATA_DIR"
-echo "  runtime profile: ${KONGODB_RUNTIME_PROFILE:-balanced}"
+echo "Starting KokoaDB"
+echo "  env:   $KOKOADB_ENV"
+echo "  mode:  $KOKOADB_STORAGE_MODE"
+echo "  port:  $KOKOADB_PORT"
+echo "  base path: ${KOKOADB_BASE_PATH:-<none>}"
+echo "  gateway path: ${KOKOADB_BASE_PATH}/gateway"
+echo "  data:  $KOKOADB_DATA_DIR"
+echo "  runtime profile: ${KOKOADB_RUNTIME_PROFILE:-balanced}"
 
 exec cargo run

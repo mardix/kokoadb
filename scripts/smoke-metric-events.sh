@@ -4,13 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18090}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/metric-events}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-metric-events.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
+PORT="${KOKOADB_PORT:-18090}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/metric-events}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-metric-events.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
@@ -27,7 +27,7 @@ assert_contains() {
   fi
 }
 
-echo "[1/8] building kongodb"
+echo "[1/8] building kokoadb"
 cargo build >/dev/null
 
 echo "[2/8] preparing smoke dirs under $SMOKE_ROOT"
@@ -35,12 +35,12 @@ rm -rf "$SMOKE_ROOT"
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
 
 echo "[3/8] starting server on :$PORT"
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="none" \
-KONGODB_WRITE_MODE="committed" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="none" \
+KOKOADB_WRITE_MODE="committed" \
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!
 cleanup() {

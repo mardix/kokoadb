@@ -424,7 +424,7 @@ impl LocalEngine {
 
         if self.conns.len() >= self.max_active_dbs {
             return Err(AppError::BadRequest(format!(
-                "max active dbs reached: {} (KONGODB_MAX_ACTIVE_DBS)",
+                "max active dbs reached: {} (KOKOADB_MAX_ACTIVE_DBS)",
                 self.max_active_dbs
             )));
         }

@@ -295,6 +295,8 @@ CREATE INDEX IF NOT EXISTS idx__kdb_identity_users_status_expires
     WHERE status_expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx__kdb_identity_tokens_user_kind_active
     ON __kdb_identity_tokens(user_id, kind, revoked_at, used_at, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx__kdb_identity_tokens_hash
+    ON __kdb_identity_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx__kdb_identity_tokens_expires
     ON __kdb_identity_tokens(expires_at)
     WHERE expires_at IS NOT NULL;

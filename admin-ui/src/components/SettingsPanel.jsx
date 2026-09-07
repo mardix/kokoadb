@@ -21,7 +21,7 @@ export function SettingsPanel() {
   const [draft, setDraft] = useState(() => settingsToDraft(settings));
   const [newConnection, setNewConnection] = useState(() => ({
     name: 'New Connection',
-    endpoint: 'http://localhost:8080/_/kdb',
+    endpoint: 'http://localhost:6543/_/kdb',
     accessKey: '',
     db: 'projects/db01.main',
     namespace: ''
@@ -68,7 +68,7 @@ export function SettingsPanel() {
   function submitNewConnection() {
     createConnection(draftToSettings(newConnection));
     setMode('edit');
-    setNewConnection({ name: 'New Connection', endpoint: 'http://localhost:8080/_/kdb', accessKey: '', db: 'projects/db01.main', namespace: '' });
+    setNewConnection({ name: 'New Connection', endpoint: 'http://localhost:6543/_/kdb', accessKey: '', db: 'projects/db01.main', namespace: '' });
   }
 
   function selectConnection(id) {
@@ -81,7 +81,7 @@ export function SettingsPanel() {
       <PageHeader
         eyebrow="Connections"
         title="Settings"
-        description="Manage multiple Kongodb connections. Each connection keeps its own endpoint, access key, selected DB, namespace, inventory cache, and request history."
+        description="Manage multiple Kokoadb connections. Each connection keeps its own endpoint, access key, selected DB, namespace, inventory cache, and request history."
         actions={<button onClick={openDocs} className="btn-secondary">Open /doc</button>}
       />
 
@@ -115,7 +115,7 @@ export function SettingsPanel() {
             <div className="panel-header-row">
               <div>
                 <h3 className="text-sm font-semibold text-slate-950">New Connection</h3>
-                <p className="text-xs text-slate-500">Use the full Kongodb endpoint path. Example: https://host/_/kdb</p>
+                <p className="text-xs text-slate-500">Use the full Kokoadb endpoint path. Example: https://host/_/kdb</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={pingNewConnection} className="btn-secondary">Ping</button>
@@ -124,7 +124,7 @@ export function SettingsPanel() {
             </div>
             <div className="grid gap-4 p-4 lg:grid-cols-2">
               <Field label="Connection Name" value={newConnection.name} onChange={(v) => updateNewConnection({ name: v })} placeholder="Local, Staging, Production" />
-              <Field label="Kongodb Endpoint" value={newConnection.endpoint} onChange={(v) => updateNewConnection({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
+              <Field label="Kokoadb Endpoint" value={newConnection.endpoint} onChange={(v) => updateNewConnection({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
               <Field label="Default DB" value={newConnection.db} onChange={(v) => updateNewConnection({ db: v })} placeholder="projects/db01.main" />
               <Field label="Default Namespace" value={newConnection.namespace} onChange={(v) => updateNewConnection({ namespace: v })} placeholder="ie: posts" />
               <Field label="Access Key" type="password" value={newConnection.accessKey} onChange={(v) => updateNewConnection({ accessKey: v })} placeholder="optional" className="lg:col-span-2" />
@@ -153,7 +153,7 @@ export function SettingsPanel() {
             </div>
             <div className="grid gap-4 p-4 lg:grid-cols-2">
               <Field label="Connection Name" value={draft.name} onChange={(v) => updateDraft({ name: v })} placeholder="Local, Staging, Production" />
-              <Field label="Kongodb Endpoint" value={draft.endpoint} onChange={(v) => updateDraft({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
+              <Field label="Kokoadb Endpoint" value={draft.endpoint} onChange={(v) => updateDraft({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
               <Field label="Default DB" value={draft.db} onChange={(v) => updateDraft({ db: v })} placeholder="projects/db01.main" />
               <Field label="Default Namespace" value={draft.namespace} onChange={(v) => updateDraft({ namespace: v })} placeholder="ie: posts" />
               <Field label="Access Key" type="password" value={draft.accessKey} onChange={(v) => updateDraft({ accessKey: v })} placeholder="X-Access-Key" className="lg:col-span-2" />
@@ -226,7 +226,7 @@ function normalizeDraft(draft) {
 function parseEndpoint(value) {
   const raw = String(value || '').trim();
   try {
-    const url = new URL(raw || 'http://localhost:8080/_/kdb');
+    const url = new URL(raw || 'http://localhost:6543/_/kdb');
     return {
       serverUrl: `${url.protocol}//${url.host}`,
       basePath: normalizeBasePath(url.pathname)
@@ -240,7 +240,7 @@ function parseEndpoint(value) {
         basePath: normalizeBasePath(clean.slice(marker))
       };
     }
-    return { serverUrl: clean || 'http://localhost:8080', basePath: '/_/kdb' };
+    return { serverUrl: clean || 'http://localhost:6543', basePath: '/_/kdb' };
   }
 }
 

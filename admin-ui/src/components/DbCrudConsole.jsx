@@ -4,6 +4,7 @@ import { connectionScopedKey, useAdmin } from '../context/AdminContext.jsx';
 import { crudPreset } from '../lib/presets.js';
 import { bestRows, extractArray, flattenRow, formatCell, rowColumns } from '../lib/results.js';
 import { pretty, tryParseJson } from '../lib/format.js';
+import { uploadPresignedFile } from '../lib/api.js';
 import { Field } from './SettingsPanel.jsx';
 import { JsonEditor, formatJsonText } from './JsonEditor.jsx';
 import { PageHeader } from './Layout.jsx';
@@ -1794,7 +1795,7 @@ function DbOverviewPanel({ db, dbInfo, namespaces, stats, dataCount, onOpen, onR
             <div className="mt-3 space-y-1">
               <button type="button" onClick={() => onOpen('query')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Query</button>
               <button type="button" onClick={() => onOpen('stats')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Stats</button>
-              <button type="button" onClick={() => onOpen('admin')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Database Admin</button>
+              <button type="button" onClick={() => onOpen('admin')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Admin</button>
             </div>
           </div>
         </div>
@@ -2269,7 +2270,7 @@ function FileCatalogForm({ form, onChange, mode }) {
     <div className="space-y-4 p-4">
       <div>
         <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Storage Location</h4>
-        <p className="mt-1 text-xs text-slate-400">Kongo stores this metadata; your application remains responsible for the actual file bytes.</p>
+        <p className="mt-1 text-xs text-slate-400">Kokoa stores this metadata; your application remains responsible for the actual file bytes.</p>
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label={mode === 'update' ? 'File Id' : 'File Id (Optional)'} value={form.id} onChange={(id) => onChange({ id })} placeholder="Generated when omitted" disabled={mode === 'update'} />
@@ -2338,7 +2339,7 @@ function FileCatalogDetail({ file, onClose, onEdit, onSoftDelete, onPurge }) {
             <summary className="cursor-pointer text-xs font-semibold text-slate-700">Metadata JSON</summary>
             <pre className="mt-3 max-h-56 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-100">{pretty(file.metadata || {})}</pre>
           </details>
-          <div className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">Deleting here changes metadata only. Kongo does not remove the underlying file bytes.</div>
+          <div className="mt-4 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-800">Deleting here changes metadata only. Kokoa does not remove the underlying file bytes.</div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
           <div className="flex flex-wrap gap-2">
@@ -3620,7 +3621,7 @@ function DbStatsPanel({ db, dbInfo, namespaces, stats, dataCount, rollups, onRef
       <section className="panel">
         <div className="border-b border-slate-200 px-4 py-3">
           <h3 className="text-sm font-semibold text-slate-950">Stored data count</h3>
-          <p className="text-xs text-slate-500">Exact current inventory across Kongo products and user-created SQLite tables.</p>
+          <p className="text-xs text-slate-500">Exact current inventory across Kokoa products and user-created SQLite tables.</p>
         </div>
         <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-5">
           <StatsTile label="Users" value={formatNumber(dataCount?.users?.total)} />
@@ -4677,7 +4678,7 @@ function IdentityUserForm({ mode, form, onChange }) {
     <div className="space-y-6 p-5">
       <div>
         <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Identity Profile</h4>
-        <p className="mt-1 text-xs text-slate-400">Kongo stores identity metadata; authentication remains in the application layer.</p>
+        <p className="mt-1 text-xs text-slate-400">Kokoa stores identity metadata; authentication remains in the application layer.</p>
       </div>
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         <Field label="Identity Id" value={form.user_id} onChange={(user_id) => onChange({ user_id })} placeholder={isAdd ? 'Optional; UUID generated when empty' : 'Identity id'} disabled={!isAdd} />
@@ -5602,8 +5603,12 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
   const [response, setResponse] = useState(null);
   const [durationMs, setDurationMs] = useState(null);
   const [backupTag, setBackupTag] = useState('');
-  const [importForm, setImportForm] = useState({ namespace: '', source_path: '', on_conflict: 'error', ignore_input_id: false, allow_system_timestamps: false });
+  const [importForm, setImportForm] = useState({ namespace: '', source_path: '', source_hash: '', on_conflict: 'error', ignore_input_id: false, allow_system_timestamps: false });
+  const [importFile, setImportFile] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
+  const [uploading, setUploading] = useState(false);
   const [exportForm, setExportForm] = useState({ namespace: '', target_path: '', compress: true, include_system_timestamps: true, include_archive: false });
+  const [downloadForm, setDownloadForm] = useState({ type: 'export', id: '', latest: false });
 
   async function runDbOperation(operation, payload = {}, successMessage = '', requestPatch = {}) {
     const startedAt = performance.now();
@@ -5620,6 +5625,74 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
 
   function updateExport(patch) {
     setExportForm((prev) => ({ ...prev, ...patch }));
+  }
+
+  async function uploadAndImport() {
+    if (!importForm.namespace || !importFile) {
+      showToast('Namespace and a .jsonl or .jsonl.zst file are required', true);
+      return;
+    }
+    if (!importFile.name.endsWith('.jsonl') && !importFile.name.endsWith('.jsonl.zst')) {
+      showToast('Upload file must end with .jsonl or .jsonl.zst', true);
+      return;
+    }
+
+    setUploading(true);
+    setUploadProgress(0);
+    try {
+      const contentType = importFile.type || (importFile.name.endsWith('.zst') ? 'application/zstd' : 'application/x-ndjson');
+      const signed = await runDbOperation('create_import_upload_url', {
+        filename: importFile.name,
+        content_type: contentType,
+        source_hash: importForm.source_hash || undefined,
+        expires_in: 900
+      });
+      const upload = signed?.data;
+      if (!upload?.upload_url || !upload?.source_path) return;
+
+      const uploaded = await runStatusCall(() => uploadPresignedFile({
+        uploadUrl: upload.upload_url,
+        method: upload.method,
+        headers: upload.required_headers,
+        file: importFile,
+        onProgress: setUploadProgress
+      }));
+      if (!uploaded) return;
+
+      updateImport({ source_path: upload.source_path });
+      await runDbOperation(
+        'import_jsonl',
+        importPayload({ ...importForm, source_path: upload.source_path }),
+        'Upload completed and import job created',
+        { namespace: importForm.namespace }
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function downloadArtifact() {
+    const payload = { type: downloadForm.type, expires_in: 300 };
+    if (downloadForm.type === 'export') payload.job_id = downloadForm.id;
+    if (downloadForm.type === 'backup') payload.backup_id = downloadForm.id;
+    if (downloadForm.type === 'snapshot') {
+      if (downloadForm.latest) payload.latest = true;
+      else payload.snapshot_id = downloadForm.id;
+    }
+    if (!downloadForm.latest && !downloadForm.id.trim()) {
+      showToast(`${downloadForm.type === 'export' ? 'Job' : downloadForm.type === 'backup' ? 'Backup' : 'Snapshot'} ID is required`, true);
+      return;
+    }
+    const response = await runDbOperation('create_download_url', payload, 'Download URL created');
+    const artifact = response?.data;
+    if (!artifact?.download_url) return;
+    const link = document.createElement('a');
+    link.href = artifact.download_url;
+    link.download = artifact.filename || '';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
   }
 
   return (
@@ -5663,7 +5736,7 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
         <section className="panel">
           <div className="panel-header">
             <h3 className="text-sm font-semibold text-slate-950">Import JSONL</h3>
-            <p className="text-xs text-slate-500">Create an async import job into a namespace from local or S3 path.</p>
+            <p className="text-xs text-slate-500">Upload a local JSONL file directly to S3, or import from an existing local/S3 path.</p>
           </div>
           <div className="grid gap-3 p-4 md:grid-cols-2">
             <Field label="Namespace" value={importForm.namespace} onChange={(namespace) => updateImport({ namespace })} placeholder="users" />
@@ -5673,6 +5746,32 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
                 {['error', 'skip', 'replace', 'merge'].map((item) => <option key={item} value={item}>{item}</option>)}
               </select>
             </label>
+            <label className="block md:col-span-2">
+              <span className="field-label">Upload Local File to S3</span>
+              <input
+                type="file"
+                accept=".jsonl,.jsonl.zst,application/x-ndjson,application/zstd"
+                onChange={(event) => {
+                  setImportFile(event.target.files?.[0] || null);
+                  setUploadProgress(null);
+                }}
+                className="field-input file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+              />
+              <span className="mt-1 block text-[11px] text-slate-500">The browser uploads directly to the configured private S3 bucket. Kokoa does not buffer the file.</span>
+            </label>
+            <Field label="Source Hash (Optional)" value={importForm.source_hash} onChange={(source_hash) => updateImport({ source_hash })} placeholder="Client-generated content identity" className="md:col-span-2" />
+            {uploadProgress !== null ? (
+              <div className="md:col-span-2" aria-live="polite">
+                <div className="mb-1 flex justify-between text-[11px] font-semibold text-slate-600"><span>Upload Progress</span><span>{uploadProgress}%</span></div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-primary transition-all" style={{ width: `${uploadProgress}%` }} /></div>
+              </div>
+            ) : null}
+            <div className="md:col-span-2 flex justify-end">
+              <button type="button" onClick={uploadAndImport} disabled={uploading || !importFile || !importForm.namespace} className="btn-primary disabled:cursor-not-allowed disabled:opacity-50">
+                {uploading ? `Uploading ${uploadProgress || 0}%` : 'Upload & Start Import'}
+              </button>
+            </div>
+            <div className="md:col-span-2 flex items-center gap-3 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400"><span className="h-px flex-1 bg-slate-200" /><span>Or Use Existing Path</span><span className="h-px flex-1 bg-slate-200" /></div>
             <Field label="Source Path" value={importForm.source_path} onChange={(source_path) => updateImport({ source_path })} placeholder="/tmp/data.jsonl.zst or s3://bucket/path/file" className="md:col-span-2" />
             <label className="flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={importForm.ignore_input_id} onChange={(event) => updateImport({ ignore_input_id: event.target.checked })} /> Ignore Input Id</label>
             <label className="flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={importForm.allow_system_timestamps} onChange={(event) => updateImport({ allow_system_timestamps: event.target.checked })} /> Allow System Timestamps</label>
@@ -5707,6 +5806,46 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={() => runDbOperation('create_backup', backupTag ? { backup_tag: backupTag } : {}, 'Backup job created')} className="btn-primary">Create Backup</button>
               <button onClick={() => runDbOperation('list_backups', { limit: 50 })} className="btn-secondary">List Backups</button>
+            </div>
+          </div>
+        </DbAdminGroup>
+
+        <DbAdminGroup title="Artifact Downloads" description="Download completed exports, backups, or immutable snapshots directly from S3.">
+          <div className="mini-card md:col-span-2">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="field-label">Artifact Type</span>
+                <select
+                  value={downloadForm.type}
+                  onChange={(event) => setDownloadForm({ type: event.target.value, id: '', latest: false })}
+                  className="field-input"
+                >
+                  <option value="export">Export</option>
+                  <option value="backup">Backup</option>
+                  <option value="snapshot">Snapshot</option>
+                </select>
+              </label>
+              <Field
+                label={downloadForm.type === 'export' ? 'Export Job ID' : downloadForm.type === 'backup' ? 'Backup ID' : 'Snapshot ID'}
+                value={downloadForm.id}
+                onChange={(id) => setDownloadForm((previous) => ({ ...previous, id }))}
+                disabled={downloadForm.type === 'snapshot' && downloadForm.latest}
+                placeholder="Paste the catalog ID"
+              />
+            </div>
+            {downloadForm.type === 'snapshot' ? (
+              <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={downloadForm.latest}
+                  onChange={(event) => setDownloadForm((previous) => ({ ...previous, latest: event.target.checked }))}
+                />
+                Download Current Snapshot
+              </label>
+            ) : null}
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-slate-500">The signed link expires after five minutes.</span>
+              <button type="button" onClick={downloadArtifact} className="btn-primary">Download</button>
             </div>
           </div>
         </DbAdminGroup>
@@ -5777,12 +5916,14 @@ function exportPayload(form) {
 }
 
 function importPayload(form) {
-  return {
+  const payload = {
     source_path: form.source_path,
     on_conflict: form.on_conflict,
     ignore_input_id: form.ignore_input_id,
     allow_system_timestamps: form.allow_system_timestamps
   };
+  if (form.source_hash) payload.source_hash = form.source_hash;
+  return payload;
 }
 
 function EmptyCards({ message }) {

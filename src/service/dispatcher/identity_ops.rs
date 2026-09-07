@@ -333,6 +333,55 @@ async fn user_update(
     Ok(GatewayResponse::ok(Some(json!({"item": current}))))
 }
 
+async fn user_update_password(
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let payload = req.payload;
+    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let password_hash = required_text(payload.password_hash, "password_hash")?;
+    let password_algo = required_text(payload.password_algo, "password_algo")?;
+    let requires_password_change = payload.requires_password_change;
+    let tx = conn.transaction().await.map_err(|e| {
+        AppError::Internal(format!("user_update_password tx begin failed: {e}"))
+    })?;
+    let updated = tx
+        .execute(
+            "UPDATE __kdb_identity_users
+             SET password_hash = ?, password_algo = ?,
+                 password_updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                 requires_password_change = COALESCE(?, requires_password_change),
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?",
+            libsql::params![
+                password_hash,
+                password_algo.clone(),
+                requires_password_change.map(|value| if value { 1 } else { 0 }),
+                user_id.clone()
+            ],
+        )
+        .await
+        .map_err(|e| AppError::BadRequest(format!("user_update_password failed: {e}")))?;
+    if updated == 0 {
+        return Err(AppError::BadRequest(format!("user not found: {user_id}")));
+    }
+    insert_identity_event_tx(
+        &tx,
+        Some(&user_id),
+        "user.password_updated",
+        json!({
+            "password_algo": password_algo,
+            "requires_password_change": requires_password_change
+        }),
+    )
+    .await?;
+    tx.commit().await.map_err(|e| {
+        AppError::Internal(format!("user_update_password tx commit failed: {e}"))
+    })?;
+    let user = fetch_identity_user(conn, &user_id).await?;
+    Ok(GatewayResponse::ok(Some(json!({"item": user}))))
+}
+
 async fn user_update_status(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
     let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
@@ -677,6 +726,264 @@ async fn user_create_token(
     }))))
 }
 
+async fn user_get_token(
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let payload = req.payload;
+    let token_id = clean_optional(payload.token_id.or(payload.id));
+    let token_hash = clean_optional(payload.token_hash);
+    if token_id.is_some() == token_hash.is_some() {
+        return Err(AppError::BadRequest(
+            "provide exactly one of token_id or token_hash".to_string(),
+        ));
+    }
+    let (sql, binds) = if let Some(token_id) = token_id {
+        (
+            format!("{} WHERE id = ? LIMIT 1", identity_token_select()),
+            vec![libsql::Value::Text(token_id)],
+        )
+    } else {
+        let kind = required_text(payload.kind, "kind")?;
+        (
+            format!(
+                "{} WHERE token_hash = ? AND kind = ? LIMIT 1",
+                identity_token_select()
+            ),
+            vec![
+                libsql::Value::Text(token_hash.unwrap_or_default()),
+                libsql::Value::Text(kind),
+            ],
+        )
+    };
+    let mut rows = conn
+        .query(&sql, binds)
+        .await
+        .map_err(|e| AppError::Internal(format!("user_get_token query failed: {e}")))?;
+    let item = rows
+        .next()
+        .await
+        .map_err(|e| AppError::Internal(format!("user_get_token row failed: {e}")))?
+        .map(|row| identity_token_from_row(&row))
+        .transpose()?;
+    Ok(GatewayResponse::ok(Some(json!({"item": item}))))
+}
+
+async fn user_consume_token(
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let payload = req.payload;
+    let token_hash = required_text(payload.token_hash, "token_hash")?;
+    let kind = required_text(payload.kind, "kind")?;
+    let tx = conn.transaction().await.map_err(|e| {
+        AppError::Internal(format!("user_consume_token tx begin failed: {e}"))
+    })?;
+    let mut rows = tx
+        .query(
+            "UPDATE __kdb_identity_tokens
+             SET used_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE token_hash = ? AND kind = ?
+               AND used_at IS NULL AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             RETURNING id, user_id, kind, expires_at, used_at, revoked_at, json(data), created_at",
+            libsql::params![token_hash, kind],
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("user_consume_token update failed: {e}")))?;
+    let item = rows
+        .next()
+        .await
+        .map_err(|e| AppError::Internal(format!("user_consume_token row failed: {e}")))?
+        .map(|row| identity_token_from_row_with_status(&row, "used"))
+        .transpose()?;
+    drop(rows);
+    let Some(item) = item else {
+        tx.commit().await.map_err(|e| {
+            AppError::Internal(format!("user_consume_token no-op commit failed: {e}"))
+        })?;
+        return Ok(GatewayResponse::ok(Some(json!({
+            "consumed": false,
+            "item": Value::Null
+        }))));
+    };
+    let user_id = item.get("user_id").and_then(Value::as_str).unwrap_or_default();
+    let token_id = item.get("token_id").and_then(Value::as_str).unwrap_or_default();
+    let token_kind = item.get("kind").and_then(Value::as_str).unwrap_or_default();
+    insert_identity_event_tx(
+        &tx,
+        Some(user_id),
+        "user.token_consumed",
+        json!({"token_id": token_id, "kind": token_kind}),
+    )
+    .await?;
+    tx.commit().await.map_err(|e| {
+        AppError::Internal(format!("user_consume_token tx commit failed: {e}"))
+    })?;
+    Ok(GatewayResponse::ok(Some(json!({
+        "consumed": true,
+        "item": item
+    }))))
+}
+
+async fn user_revoke_token(
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let payload = req.payload;
+    let token_id = clean_optional(payload.token_id.or(payload.id));
+    let token_hash = clean_optional(payload.token_hash);
+    let user_id = clean_optional(payload.user_id);
+    let selector_count = usize::from(token_id.is_some())
+        + usize::from(token_hash.is_some())
+        + usize::from(user_id.is_some());
+    if selector_count != 1 {
+        return Err(AppError::BadRequest(
+            "provide exactly one selector: token_id, token_hash, or user_id".to_string(),
+        ));
+    }
+    let kind = clean_optional(payload.kind);
+    if token_hash.is_some() && kind.is_none() {
+        return Err(AppError::BadRequest(
+            "kind is required with token_hash".to_string(),
+        ));
+    }
+    let (selector, binds) = if let Some(token_id) = token_id {
+        ("id = ?".to_string(), vec![libsql::Value::Text(token_id)])
+    } else if let Some(token_hash) = token_hash {
+        (
+            "token_hash = ? AND kind = ?".to_string(),
+            vec![
+                libsql::Value::Text(token_hash),
+                libsql::Value::Text(kind.clone().unwrap_or_default()),
+            ],
+        )
+    } else if let Some(user_id) = user_id {
+        if let Some(kind) = kind {
+            (
+                "user_id = ? AND kind = ?".to_string(),
+                vec![libsql::Value::Text(user_id), libsql::Value::Text(kind)],
+            )
+        } else {
+            ("user_id = ?".to_string(), vec![libsql::Value::Text(user_id)])
+        }
+    } else {
+        unreachable!()
+    };
+    let tx = conn.transaction().await.map_err(|e| {
+        AppError::Internal(format!("user_revoke_token tx begin failed: {e}"))
+    })?;
+    let mut rows = tx
+        .query(
+            &format!(
+                "UPDATE __kdb_identity_tokens
+                 SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE {selector}
+                   AND used_at IS NULL AND revoked_at IS NULL
+                   AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                 RETURNING id, user_id, kind"
+            ),
+            binds,
+        )
+        .await
+        .map_err(|e| AppError::Internal(format!("user_revoke_token update failed: {e}")))?;
+    let mut revoked = Vec::<(String, String, String)>::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| AppError::Internal(format!("user_revoke_token row failed: {e}")))?
+    {
+        revoked.push((
+            row.get(0).map_err(|e| AppError::Internal(format!("token id decode failed: {e}")))?,
+            row.get(1).map_err(|e| AppError::Internal(format!("token user decode failed: {e}")))?,
+            row.get(2).map_err(|e| AppError::Internal(format!("token kind decode failed: {e}")))?,
+        ));
+    }
+    drop(rows);
+    for (token_id, user_id, kind) in &revoked {
+        insert_identity_event_tx(
+            &tx,
+            Some(user_id),
+            "user.token_revoked",
+            json!({"token_id": token_id, "kind": kind}),
+        )
+        .await?;
+    }
+    tx.commit().await.map_err(|e| {
+        AppError::Internal(format!("user_revoke_token tx commit failed: {e}"))
+    })?;
+    Ok(GatewayResponse::ok(Some(json!({
+        "revoked_count": revoked.len(),
+        "token_ids": revoked.into_iter().map(|item| item.0).collect::<Vec<_>>()
+    }))))
+}
+
+fn identity_token_select() -> &'static str {
+    "SELECT id, user_id, kind, expires_at, used_at, revoked_at, json(data), created_at FROM __kdb_identity_tokens"
+}
+
+fn identity_token_from_row(row: &libsql::Row) -> AppResult<Value> {
+    let expires_at: Option<String> = row
+        .get(3)
+        .map_err(|e| AppError::Internal(format!("token expires_at decode failed: {e}")))?;
+    let used_at: Option<String> = row
+        .get(4)
+        .map_err(|e| AppError::Internal(format!("token used_at decode failed: {e}")))?;
+    let revoked_at: Option<String> = row
+        .get(5)
+        .map_err(|e| AppError::Internal(format!("token revoked_at decode failed: {e}")))?;
+    let status = if revoked_at.is_some() {
+        "revoked"
+    } else if used_at.is_some() {
+        "used"
+    } else if expires_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|value| value.with_timezone(&Utc) <= Utc::now())
+    {
+        "expired"
+    } else {
+        "active"
+    };
+    identity_token_value(row, expires_at, used_at, revoked_at, status)
+}
+
+fn identity_token_from_row_with_status(row: &libsql::Row, status: &str) -> AppResult<Value> {
+    let expires_at = row
+        .get(3)
+        .map_err(|e| AppError::Internal(format!("token expires_at decode failed: {e}")))?;
+    let used_at = row
+        .get(4)
+        .map_err(|e| AppError::Internal(format!("token used_at decode failed: {e}")))?;
+    let revoked_at = row
+        .get(5)
+        .map_err(|e| AppError::Internal(format!("token revoked_at decode failed: {e}")))?;
+    identity_token_value(row, expires_at, used_at, revoked_at, status)
+}
+
+fn identity_token_value(
+    row: &libsql::Row,
+    expires_at: Option<String>,
+    used_at: Option<String>,
+    revoked_at: Option<String>,
+    status: &str,
+) -> AppResult<Value> {
+    let raw_data: Option<String> = row
+        .get(6)
+        .map_err(|e| AppError::Internal(format!("token data decode failed: {e}")))?;
+    Ok(json!({
+        "token_id": row.get::<String>(0).map_err(|e| AppError::Internal(format!("token id decode failed: {e}")))?,
+        "user_id": row.get::<String>(1).map_err(|e| AppError::Internal(format!("token user decode failed: {e}")))?,
+        "kind": row.get::<String>(2).map_err(|e| AppError::Internal(format!("token kind decode failed: {e}")))?,
+        "status": status,
+        "expires_at": expires_at,
+        "used_at": used_at,
+        "revoked_at": revoked_at,
+        "data": raw_data.as_deref().and_then(|value| serde_json::from_str::<Value>(value).ok()).unwrap_or_else(|| json!({})),
+        "created_at": row.get::<String>(7).map_err(|e| AppError::Internal(format!("token created_at decode failed: {e}")))?
+    }))
+}
+
 async fn fetch_identity_user(conn: &libsql::Connection, user_id: &str) -> AppResult<Value> {
     let mut rows = conn
         .query(
@@ -891,6 +1198,27 @@ async fn log_identity_event(
     data: Value,
 ) -> AppResult<()> {
     conn.execute(
+        "INSERT INTO __kdb_identity_events (id, user_id, event, data)
+         VALUES (?, ?, ?, json(?))",
+        libsql::params![
+            Uuid::new_v4().simple().to_string(),
+            to_sql_nullable_text(user_id.map(str::to_string)),
+            event.to_string(),
+            data.to_string()
+        ],
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("identity event insert failed: {e}")))?;
+    Ok(())
+}
+
+async fn insert_identity_event_tx(
+    tx: &libsql::Transaction,
+    user_id: Option<&str>,
+    event: &str,
+    data: Value,
+) -> AppResult<()> {
+    tx.execute(
         "INSERT INTO __kdb_identity_events (id, user_id, event, data)
          VALUES (?, ?, ?, json(?))",
         libsql::params![

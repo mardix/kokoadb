@@ -4,21 +4,21 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18081}"
+PORT="${KOKOADB_PORT:-18081}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
 GATEWAY_PATH="${BASE_PATH}/gateway"
 GATEWAY_URL="${BASE_URL}${GATEWAY_PATH}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/backup}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-BACKUP_DIR="${KONGODB_BACKUP_PATH:-${SMOKE_ROOT}/backups}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-backup.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
-DB="${KONGODB_SMOKE_DB:-smoke.backup.main}"
-NS="${KONGODB_SMOKE_NAMESPACE:-backup_users}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/backup}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+BACKUP_DIR="${KOKOADB_BACKUP_PATH:-${SMOKE_ROOT}/backups}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-backup.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
+DB="${KOKOADB_SMOKE_DB:-smoke.backup.main}"
+NS="${KOKOADB_SMOKE_NAMESPACE:-backup_users}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -75,7 +75,7 @@ need_cmd cargo
 need_cmd curl
 need_cmd find
 
-echo "[1/8] building kongodb"
+echo "[1/8] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -88,13 +88,13 @@ rm -rf "$SMOKE_ROOT"
 mkdir -p "$DATA_DIR" "$BACKUP_DIR" "$(dirname "$LOG_FILE")"
 
 echo "[3/8] starting server on :$PORT"
-export KONGODB_PORT="$PORT"
-export KONGODB_STORAGE_MODE="local"
-export KONGODB_DATA_DIR="$DATA_DIR"
-export KONGODB_AUTH_MODE="none"
-export KONGODB_BASE_PATH="$BASE_PATH"
-export KONGODB_BACKUP_EVERY_SECS="1"
-export KONGODB_BACKUP_PATH="$BACKUP_DIR"
+export KOKOADB_PORT="$PORT"
+export KOKOADB_STORAGE_MODE="local"
+export KOKOADB_DATA_DIR="$DATA_DIR"
+export KOKOADB_AUTH_MODE="none"
+export KOKOADB_BASE_PATH="$BASE_PATH"
+export KOKOADB_BACKUP_EVERY_SECS="1"
+export KOKOADB_BACKUP_PATH="$BACKUP_DIR"
 
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!

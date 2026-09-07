@@ -4,21 +4,21 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18086}"
+PORT="${KOKOADB_PORT:-18086}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
 GATEWAY_PATH="${BASE_PATH}/gateway"
 GATEWAY_URL="${BASE_URL}${GATEWAY_PATH}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/export-import-zst}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-export-import-zst.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
-DB="${KONGODB_SMOKE_DB:-smoke.export.import.zst}"
-SRC_NS="${KONGODB_SMOKE_SOURCE_NS:-users_src}"
-DST_NS="${KONGODB_SMOKE_TARGET_NS:-users_dst}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/export-import-zst}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-export-import-zst.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
+DB="${KOKOADB_SMOKE_DB:-smoke.export.import.zst}"
+SRC_NS="${KOKOADB_SMOKE_SOURCE_NS:-users_src}"
+DST_NS="${KOKOADB_SMOKE_TARGET_NS:-users_dst}"
 EXPORT_PREFIX="${SMOKE_ROOT}/exports/users_export"
 
 need_cmd() {
@@ -75,7 +75,7 @@ wait_for_job_completed() {
 need_cmd cargo
 need_cmd curl
 
-echo "[1/8] building kongodb"
+echo "[1/8] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -88,12 +88,12 @@ rm -rf "$SMOKE_ROOT"
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")" "$(dirname "$EXPORT_PREFIX")"
 
 echo "[3/8] starting server on :$PORT"
-export KONGODB_PORT="$PORT"
-export KONGODB_STORAGE_MODE="local"
-export KONGODB_DATA_DIR="$DATA_DIR"
-export KONGODB_BASE_PATH="$BASE_PATH"
-export KONGODB_AUTH_MODE="none"
-export KONGODB_EXPORT_PATH="${KONGODB_EXPORT_PATH:-${SMOKE_ROOT}/exports}"
+export KOKOADB_PORT="$PORT"
+export KOKOADB_STORAGE_MODE="local"
+export KOKOADB_DATA_DIR="$DATA_DIR"
+export KOKOADB_BASE_PATH="$BASE_PATH"
+export KOKOADB_AUTH_MODE="none"
+export KOKOADB_EXPORT_PATH="${KOKOADB_EXPORT_PATH:-${SMOKE_ROOT}/exports}"
 
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!

@@ -9,7 +9,7 @@ pub mod snapshot;
 
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-use chrono::NaiveDateTime;
+use chrono::{Duration, NaiveDateTime, SecondsFormat, Utc};
 use dashmap::DashMap;
 use libsql::{Builder, Connection};
 use serde::Serialize;
@@ -78,6 +78,28 @@ pub struct DbSnapshotsList {
     pub db: String,
     pub current_snapshot_id: Option<String>,
     pub snapshots: Vec<SnapshotMeta>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportUploadUrl {
+    pub upload_url: String,
+    pub source_path: String,
+    pub filename: String,
+    pub method: &'static str,
+    pub required_headers: std::collections::BTreeMap<String, String>,
+    pub expires_in: u64,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtifactDownloadUrl {
+    pub download_url: String,
+    pub source_path: String,
+    pub filename: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub expires_in: u64,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -753,6 +775,112 @@ impl S3WalEngine {
         store.delete(&key).await
     }
 
+    pub async fn create_import_upload_url(
+        &self,
+        db_path: &str,
+        filename: &str,
+        content_type: &str,
+        source_hash: Option<&str>,
+        expires_in_secs: u64,
+    ) -> AppResult<ImportUploadUrl> {
+        let (db_path, _) = resolve_db_file(self.base_path.as_str(), db_path)?;
+        let filename = sanitize_import_filename(filename)?;
+        let prefix = self.cfg.prefix.trim_matches('/');
+        let upload_id = Uuid::new_v4().simple().to_string();
+        let object_key = import_upload_object_key(prefix, &db_path, &upload_id, &filename);
+        let source_hash = source_hash.map(str::trim).filter(|value| !value.is_empty());
+        let store = AwsS3ObjectStore::new(
+            &format!("s3://{}", self.cfg.bucket),
+            &self.cfg.region,
+            self.cfg.endpoint.as_deref(),
+            self.cfg.credentials.as_ref(),
+        )?;
+        let (upload_url, headers) = store
+            .presign_put(&object_key, content_type, source_hash, expires_in_secs)
+            .await?;
+        let required_headers = headers.into_iter().collect();
+        let expires_at = (Utc::now() + Duration::seconds(expires_in_secs as i64))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        Ok(ImportUploadUrl {
+            upload_url,
+            source_path: format!("s3://{}/{object_key}", self.cfg.bucket),
+            filename,
+            method: "PUT",
+            required_headers,
+            expires_in: expires_in_secs,
+            expires_at,
+        })
+    }
+
+    pub async fn create_artifact_download_url(
+        &self,
+        source_path: &str,
+        expires_in_secs: u64,
+    ) -> AppResult<ArtifactDownloadUrl> {
+        let (store, key) = self.regular_s3_store_for_uri(source_path)?;
+        let filename = Path::new(&key)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::BadRequest("artifact path has no filename".to_string()))?
+            .to_string();
+        let Some((size_bytes, stored_content_type)) = store.head_metadata(&key).await? else {
+            return Err(AppError::NotFound(format!(
+                "s3 artifact not found: {source_path}"
+            )));
+        };
+        let content_type = stored_content_type
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| artifact_content_type(&filename).to_string());
+        let download_url = store
+            .presign_get(&key, &filename, &content_type, expires_in_secs)
+            .await?;
+        let expires_at = (Utc::now() + Duration::seconds(expires_in_secs as i64))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        Ok(ArtifactDownloadUrl {
+            download_url,
+            source_path: source_path.to_string(),
+            filename,
+            content_type,
+            size_bytes,
+            expires_in: expires_in_secs,
+            expires_at,
+        })
+    }
+
+    pub async fn snapshot_source_path(
+        &self,
+        db_path: &str,
+        snapshot_id: Option<&str>,
+        latest: bool,
+    ) -> AppResult<(String, String)> {
+        let snapshots = self.list_db_snapshots(db_path).await?;
+        let resolved_id = if let Some(snapshot_id) = snapshot_id {
+            snapshot_id.to_string()
+        } else if latest {
+            snapshots.current_snapshot_id.ok_or_else(|| {
+                AppError::NotFound(format!("no current snapshot for db: {db_path}"))
+            })?
+        } else {
+            return Err(AppError::BadRequest(
+                "snapshot download requires snapshot_id or latest=true".to_string(),
+            ));
+        };
+        let snapshot = snapshots
+            .snapshots
+            .into_iter()
+            .find(|item| item.id == resolved_id)
+            .ok_or_else(|| {
+                AppError::NotFound(format!(
+                    "snapshot not found for db {db_path}: {resolved_id}"
+                ))
+            })?;
+        Ok((
+            resolved_id,
+            format!("s3://{}/{}", self.cfg.bucket, snapshot.object_key),
+        ))
+    }
+
     pub async fn run_auto_indexing(
         &self,
         min_hits: i64,
@@ -881,7 +1009,7 @@ impl S3WalEngine {
 
         if self.conns.len() >= self.max_active_dbs {
             return Err(AppError::BadRequest(format!(
-                "max active dbs reached: {} (KONGODB_MAX_ACTIVE_DBS)",
+                "max active dbs reached: {} (KOKOADB_MAX_ACTIVE_DBS)",
                 self.max_active_dbs
             )));
         }
@@ -1444,7 +1572,7 @@ impl S3WalEngine {
         };
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             AppError::BadRequest(
-                "missing s3 credentials (KONGODB_S3_ACCESS_KEY / KONGODB_S3_SECRET_KEY)"
+                "missing s3 credentials (KOKOADB_S3_ACCESS_KEY / KOKOADB_S3_SECRET_KEY)"
                     .to_string(),
             )
         })?;
@@ -1677,7 +1805,7 @@ impl S3WalEngine {
         }
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             AppError::BadRequest(
-                "missing s3 credentials (KONGODB_S3_ACCESS_KEY / KONGODB_S3_SECRET_KEY)"
+                "missing s3 credentials (KOKOADB_S3_ACCESS_KEY / KOKOADB_S3_SECRET_KEY)"
                     .to_string(),
             )
         })?;
@@ -1708,7 +1836,7 @@ fn build_store(cfg: &Arc<S3Config>) -> AppResult<Arc<dyn object_store::ObjectSto
     let endpoint = cfg.endpoint.clone();
     let creds = cfg.credentials.as_ref().ok_or_else(|| {
         AppError::BadRequest(
-            "missing s3 credentials (KONGODB_S3_ACCESS_KEY / KONGODB_S3_SECRET_KEY)".to_string(),
+            "missing s3 credentials (KOKOADB_S3_ACCESS_KEY / KOKOADB_S3_SECRET_KEY)".to_string(),
         )
     })?;
     validate_credentials(creds)?;
@@ -2003,6 +2131,60 @@ fn short_db_hash(db_path: &str) -> String {
     hex[..16].to_string()
 }
 
+fn sanitize_import_filename(filename: &str) -> AppResult<String> {
+    let filename = filename.trim();
+    let basename = Path::new(filename)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if basename.is_empty() || basename != filename || matches!(basename, "." | "..") {
+        return Err(AppError::BadRequest(
+            "filename must be a plain file name without path segments".to_string(),
+        ));
+    }
+    if !basename.ends_with(".jsonl") && !basename.ends_with(".jsonl.zst") {
+        return Err(AppError::BadRequest(
+            "filename must end with .jsonl or .jsonl.zst".to_string(),
+        ));
+    }
+    if basename
+        .chars()
+        .any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')))
+    {
+        return Err(AppError::BadRequest(
+            "filename may contain only letters, digits, '.', '_', and '-'".to_string(),
+        ));
+    }
+    Ok(basename.to_string())
+}
+
+fn import_upload_object_key(
+    prefix: &str,
+    db_path: &str,
+    upload_id: &str,
+    filename: &str,
+) -> String {
+    let relative_key = format!("imports/{db_path}/{upload_id}/{filename}");
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        relative_key
+    } else {
+        format!("{prefix}/{relative_key}")
+    }
+}
+
+fn artifact_content_type(filename: &str) -> &'static str {
+    if filename.ends_with(".jsonl.zst") || filename.ends_with(".db.zst") {
+        "application/zstd"
+    } else if filename.ends_with(".jsonl") {
+        "application/x-ndjson"
+    } else if filename.ends_with(".db") {
+        "application/vnd.sqlite3"
+    } else {
+        "application/octet-stream"
+    }
+}
+
 fn unix_now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2045,7 +2227,10 @@ async fn dump_db_to_temp_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_manifest_snapshot;
+    use super::{
+        artifact_content_type, import_upload_object_key, resolve_manifest_snapshot,
+        sanitize_import_filename,
+    };
     use crate::storage::s3_wal::{manifest::Manifest, snapshot::SnapshotMeta};
 
     fn manifest() -> Manifest {
@@ -2099,6 +2284,47 @@ mod tests {
         assert_eq!(
             resolve_manifest_snapshot(&manifest(), Some("missing")),
             None
+        );
+    }
+
+    #[test]
+    fn accepts_safe_jsonl_upload_filenames() {
+        assert_eq!(
+            sanitize_import_filename("users-2026_09.jsonl").unwrap(),
+            "users-2026_09.jsonl"
+        );
+        assert_eq!(
+            sanitize_import_filename("users.jsonl.zst").unwrap(),
+            "users.jsonl.zst"
+        );
+    }
+
+    #[test]
+    fn rejects_upload_paths_and_non_jsonl_filenames() {
+        assert!(sanitize_import_filename("nested/users.jsonl").is_err());
+        assert!(sanitize_import_filename("users.json").is_err());
+        assert!(sanitize_import_filename("users data.jsonl").is_err());
+    }
+
+    #[test]
+    fn builds_import_upload_key_with_prefix_once() {
+        let key = import_upload_object_key("/data/kongo/", "app/main", "upload123", "users.jsonl");
+        assert_eq!(key, "data/kongo/imports/app/main/upload123/users.jsonl");
+        assert_eq!(key.matches("data/kongo").count(), 1);
+    }
+
+    #[test]
+    fn infers_download_content_types_from_artifact_names() {
+        assert_eq!(artifact_content_type("users.jsonl"), "application/x-ndjson");
+        assert_eq!(artifact_content_type("users.jsonl.zst"), "application/zstd");
+        assert_eq!(
+            artifact_content_type("snapshot.db"),
+            "application/vnd.sqlite3"
+        );
+        assert_eq!(artifact_content_type("backup.db.zst"), "application/zstd");
+        assert_eq!(
+            artifact_content_type("unknown.bin"),
+            "application/octet-stream"
         );
     }
 }

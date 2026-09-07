@@ -4,18 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-BASE_URL="${KONGODB_SMOKE_URL:-http://127.0.0.1:8080}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_URL="${KOKOADB_SMOKE_URL:-http://127.0.0.1:6543}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
 GATEWAY_PATH="${BASE_PATH}/gateway"
 GATEWAY_URL="${BASE_URL}${GATEWAY_PATH}"
-DB="${KONGODB_SMOKE_DB:-smoke.snapshot.main}"
-NS="${KONGODB_SMOKE_NAMESPACE:-snap_users}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/snapshot}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/snapshot.log}"
-ACCESS_KEY="${KONGODB_ACCESS_KEY:-}"
+DB="${KOKOADB_SMOKE_DB:-smoke.snapshot.main}"
+NS="${KOKOADB_SMOKE_NAMESPACE:-snap_users}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/snapshot}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/snapshot.log}"
+ACCESS_KEY="${KOKOADB_ACCESS_KEY:-}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {

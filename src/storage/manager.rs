@@ -9,8 +9,9 @@ use crate::{
         local::LocalEngine,
         reaper::ReaperStats,
         s3_wal::{
-            CompactWalResult, DbSnapshotsList, RemoteSyncReport, ReplicationFlushReport,
-            S3WalEngine, SyncDbResult, SyncStatus, VerifyDbResult,
+            ArtifactDownloadUrl, CompactWalResult, DbSnapshotsList, ImportUploadUrl,
+            RemoteSyncReport, ReplicationFlushReport, S3WalEngine, SyncDbResult, SyncStatus,
+            VerifyDbResult,
         },
     },
 };
@@ -271,6 +272,67 @@ impl MultiDbManager {
         match &self.backend {
             StorageBackend::S3(engine) => engine.delete_s3_uri(uri).await,
             StorageBackend::Local(engine) => engine.delete_s3_uri(uri).await,
+        }
+    }
+
+    pub async fn create_import_upload_url(
+        &self,
+        db_path: &str,
+        filename: &str,
+        content_type: &str,
+        source_hash: Option<&str>,
+        expires_in_secs: u64,
+    ) -> AppResult<ImportUploadUrl> {
+        match &self.backend {
+            StorageBackend::S3(engine) => {
+                engine
+                    .create_import_upload_url(
+                        db_path,
+                        filename,
+                        content_type,
+                        source_hash,
+                        expires_in_secs,
+                    )
+                    .await
+            }
+            StorageBackend::Local(_) => Err(crate::error::AppError::BadRequest(
+                "create_import_upload_url is only supported in s3 storage mode".to_string(),
+            )),
+        }
+    }
+
+    pub async fn create_artifact_download_url(
+        &self,
+        source_path: &str,
+        expires_in_secs: u64,
+    ) -> AppResult<ArtifactDownloadUrl> {
+        match &self.backend {
+            StorageBackend::S3(engine) => {
+                engine
+                    .create_artifact_download_url(source_path, expires_in_secs)
+                    .await
+            }
+            StorageBackend::Local(_) => Err(crate::error::AppError::BadRequest(
+                "create_download_url is only supported in s3 storage mode".to_string(),
+            )),
+        }
+    }
+
+    pub async fn snapshot_source_path(
+        &self,
+        db_path: &str,
+        snapshot_id: Option<&str>,
+        latest: bool,
+    ) -> AppResult<(String, String)> {
+        match &self.backend {
+            StorageBackend::S3(engine) => {
+                engine
+                    .snapshot_source_path(db_path, snapshot_id, latest)
+                    .await
+            }
+            StorageBackend::Local(_) => Err(crate::error::AppError::BadRequest(
+                "snapshot downloads are only supported in s3 storage mode".to_string(),
+            )),
         }
     }
 

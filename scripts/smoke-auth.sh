@@ -4,13 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18082}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/auth}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/auth.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
+PORT="${KOKOADB_PORT:-18082}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/auth}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/auth.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
@@ -39,7 +39,7 @@ assert_contains() {
 need_cmd cargo
 need_cmd curl
 
-echo "[1/7] building kongodb"
+echo "[1/7] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -50,12 +50,12 @@ fi
 echo "[2/7] startup auth configuration validation"
 mkdir -p "$SMOKE_ROOT/logs"
 set +e
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="invalid" \
-KONGODB_ACCESS_KEY="" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="invalid" \
+KOKOADB_ACCESS_KEY="" \
 "$BIN" >"${SMOKE_ROOT}/logs/startup-invalid-mode.log" 2>&1
 invalid_mode_rc=$?
 set -e
@@ -64,16 +64,16 @@ if [[ "$invalid_mode_rc" -eq 0 ]]; then
   exit 1
 fi
 assert_contains "$(cat "${SMOKE_ROOT}/logs/startup-invalid-mode.log")" \
-  'KONGODB_AUTH_MODE must be access_key|none' \
+  'KOKOADB_AUTH_MODE must be access_key|none' \
   "invalid auth mode should report accepted values"
 
 set +e
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="access_key" \
-KONGODB_ACCESS_KEY="" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="access_key" \
+KOKOADB_ACCESS_KEY="" \
 "$BIN" >"${SMOKE_ROOT}/logs/startup-fail.log" 2>&1
 rc=$?
 set -e
@@ -85,12 +85,12 @@ fi
 echo "[3/7] start server with access key"
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="access_key" \
-KONGODB_ACCESS_KEY="$AUTH_KEY" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="access_key" \
+KOKOADB_ACCESS_KEY="$AUTH_KEY" \
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!
 cleanup() {

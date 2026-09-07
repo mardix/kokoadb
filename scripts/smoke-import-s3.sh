@@ -4,23 +4,23 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-BASE_URL="${KONGODB_SMOKE_URL:-http://127.0.0.1:8080}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_URL="${KOKOADB_SMOKE_URL:-http://127.0.0.1:6543}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
 GATEWAY_PATH="${BASE_PATH}/gateway"
 GATEWAY_URL="${BASE_URL}${GATEWAY_PATH}"
-DB="${KONGODB_SMOKE_DB:-smoke.import.s3}"
-NS="${KONGODB_SMOKE_NAMESPACE:-imports_s3}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/import-s3}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/import-s3.log}"
-ACCESS_KEY="${KONGODB_ACCESS_KEY:-}"
+DB="${KOKOADB_SMOKE_DB:-smoke.import.s3}"
+NS="${KOKOADB_SMOKE_NAMESPACE:-imports_s3}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/import-s3}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/import-s3.log}"
+ACCESS_KEY="${KOKOADB_ACCESS_KEY:-}"
 
-S3_BUCKET="${KONGODB_S3_BUCKET:-}"
-S3_PREFIX="${KONGODB_S3_PREFIX:-kongodb}"
-S3_REGION="${KONGODB_S3_REGION:-us-east-1}"
-S3_ENDPOINT="${KONGODB_S3_ENDPOINT:-}"
+S3_BUCKET="${KOKOADB_S3_BUCKET:-}"
+S3_PREFIX="${KOKOADB_S3_PREFIX:-kongodb}"
+S3_REGION="${KOKOADB_S3_REGION:-us-east-1}"
+S3_ENDPOINT="${KOKOADB_S3_ENDPOINT:-}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -79,7 +79,7 @@ mkdir -p "$SMOKE_ROOT"
 : > "$LOG_FILE"
 
 if [[ -z "$S3_BUCKET" ]]; then
-  echo "smoke-import-s3 skipped: KONGODB_S3_BUCKET not set" | tee -a "$LOG_FILE"
+  echo "smoke-import-s3 skipped: KOKOADB_S3_BUCKET not set" | tee -a "$LOG_FILE"
   exit 0
 fi
 

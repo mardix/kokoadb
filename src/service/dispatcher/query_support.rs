@@ -551,8 +551,7 @@ fn jsonb_enabled() -> bool {
 }
 
 fn strict_mutation_operators_env() -> bool {
-    std::env::var("KONGODB_STRICT_MUTATIONS_OPERATORS")
-        .ok()
+    crate::config::env_value("KOKOADB_STRICT_MUTATIONS_OPERATORS")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }

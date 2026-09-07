@@ -4,19 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18084}"
+PORT="${KOKOADB_PORT:-18084}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
 GATEWAY_PATH="${BASE_PATH}/gateway"
 GATEWAY_URL="${BASE_URL}${GATEWAY_PATH}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/replication-jobs}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-replication-jobs.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
-DB="${KONGODB_SMOKE_DB:-smoke.replication.jobs}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/replication-jobs}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-replication-jobs.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
+DB="${KOKOADB_SMOKE_DB:-smoke.replication.jobs}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -39,7 +39,7 @@ assert_contains() {
 need_cmd cargo
 need_cmd curl
 
-echo "[1/7] building kongodb"
+echo "[1/7] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -52,12 +52,12 @@ rm -rf "$SMOKE_ROOT"
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
 
 echo "[3/7] starting server on :$PORT"
-export KONGODB_PORT="$PORT"
-export KONGODB_STORAGE_MODE="local"
-export KONGODB_DATA_DIR="$DATA_DIR"
-export KONGODB_AUTH_MODE="none"
-export KONGODB_BASE_PATH="$BASE_PATH"
-export KONGODB_REPLICATION_MODE="async"
+export KOKOADB_PORT="$PORT"
+export KOKOADB_STORAGE_MODE="local"
+export KOKOADB_DATA_DIR="$DATA_DIR"
+export KOKOADB_AUTH_MODE="none"
+export KOKOADB_BASE_PATH="$BASE_PATH"
+export KOKOADB_REPLICATION_MODE="async"
 
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!

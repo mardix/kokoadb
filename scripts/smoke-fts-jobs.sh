@@ -4,13 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18085}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/fts-jobs}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-fts-jobs.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
+PORT="${KOKOADB_PORT:-18085}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/fts-jobs}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke-fts-jobs.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
@@ -65,7 +65,7 @@ poll_job_status() {
 need_cmd cargo
 need_cmd curl
 
-echo "[1/10] building kongodb"
+echo "[1/10] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -78,11 +78,11 @@ rm -rf "$SMOKE_ROOT"
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
 
 echo "[3/10] starting server on :$PORT"
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="none" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="none" \
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!
 cleanup() {

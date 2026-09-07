@@ -79,6 +79,7 @@ pub struct OperationPayload {
     pub email_verified_at: Option<String>,
     pub phone_verified_at: Option<String>,
     pub token_hash: Option<String>,
+    pub token_id: Option<String>,
     pub kind: Option<String>,
     pub allow_multi: Option<bool>,
     pub bucket: Option<String>,

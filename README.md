@@ -1,1752 +1,285 @@
-# KiDB
+# Kokoadb
 
-> KiDB = Kongo Index Database
+**Kokoadb** is a fast and lightweight data platform built in Rust on LibSQL/SQLite. It runs locally, in Docker, or with S3-backed storage, and it's exposed as a single RPC-style HTTP endpoint: JSON in, JSON out.
 
-**KiDB** is a lightweight, self-hosted data platform that combines the flexibility of a document database with the power of SQLite. It provides one consistent JSON API for document storage, direct SQL access, identity records, file metadata, metrics, audit logs, full-text search, and database administration.
+One consistent JSON API, eight capabilities:
 
-Built in Rust on SQLite/libSQL, KiDB is designed for applications that need a capable embedded or standalone data service without operating a large database stack. It runs locally, in Docker, or with S3-backed storage — and it's exposed as a single RPC-style HTTP endpoint: JSON in, JSON out.
-
-View the full [Documentation](./DOCUMENTATION.md).
-
----
-
-
-## Table of Contents
-
-1. [The Stacks at a Glance](#the-stacks-at-a-glance)
-2. [Main Features](#main-features)
-3. [Deployment Models](#deployment-models)
-4. [Quick Start](#quick-start)
-5. [API Surface](#api-surface)
-6. [Request / Response Contract](#request--response-contract)
-7. [The KiDB Stack](#the-kongo-stack)
-   - [DocumentDB (Data Stack)](#documentdb-data-stack)
-   - [Identity](#identity)
-   - [Files](#files)
-   - [SQLiteDB (SQL Stack)](#sqlitedb-sql-stack)
-   - [FTS (Full-Text Search)](#fts-full-text-search)
-   - [Transaction](#transaction)
-   - [Metrics](#metrics)
-   - [Audit Logs](#audit-logs)
-   - [Advanced (Database, Jobs, Admin, Namespace)](#advanced-database-jobs-admin-namespace)
-8. [Filter Operators, Compute Operators & Lookup Operators](#filter-operators-compute-operators--lookup-operators)
-9. [Generator Operators & Mutation Operators](#generator-operators--mutation-operators)
-10. [Payload Field Reference](#payload-field-reference)
-11. [Configuration Reference](#configuration-reference)
-12. [Admin UI](#admin-ui)
-13. [Deployment](#deployment)
-14. [Examples](#examples)
-
----
-
-## The Stacks at a Glance
-
-| Stack | What it's for |
+| | |
 |---|---|
-| **DocumentDB** | Full-featured document database — CRUD, filters, sorting, projections, lookups |
-| **Identity** | Storage for auth/user records — profiles, statuses, providers, tokens |
-| **Files** | File *metadata* storage (KiDB doesn't store the bytes themselves) |
-| **Metrics** | Application metric events — counts, sums, averages, time buckets |
-| **FTSearch** | Full-text search over documents (SQLite FTS5) |
-| **SQLiteDB** | Direct, parameterized SQL access to your own tables |
-| **Audit Logs** | Immutable audit event storage, queryable by actor/action/target |
+| **DocumentDB** | Schemaless JSON in namespaces. Filters, joins, aggregation, projection, TTL, soft delete, and transactions. |
+| **SQLiteDB** | Parameterized SQL against your own tables in the same database, plus table and schema discovery. |
+| **Identity** | User records, provider links, statuses, and token hashes. Your app authenticates; Kokoadb stores the state. |
+| **Files** | Metadata registry for objects stored elsewhere: ownership, location, hashes, expiry, deletion state. |
+| **Search** | Full-text search (FTS5) over live documents, with background indexing. |
+| **Metrics** | Event ingest with bucketed, grouped aggregation over rolling and calendar ranges. |
+| **Audit Logs** | Append-only activity records, queryable by actor, action, target, status, source, and time. |
+| **Admin** | Backups, snapshots, S3 sync, JSONL import/export, background jobs, and a built-in Admin UI. |
 
+📖 **[Full documentation](DOCUMENTATION.md)** · also served at `/_/kdb/doc` on any running instance.
 
-## Main Features
+## Contents
 
-- **Hybrid Document and SQL Database**
-  Store schemaless JSON documents in namespaces while retaining direct access to SQLite tables and SQL queries.
+- [Install and run](#install-and-run)
+- [HTTP endpoints](#http-endpoints)
+- [Request envelope](#request-envelope)
+- [Operations](#operations)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+- [Scope and boundaries](#scope-and-boundaries)
 
-- **Complete Document Operations**
-  Insert, update, delete, query, aggregate, upsert, paginate, project fields, sort, filter, join related documents, and manage TTL or scheduled conditional lifecycle changes.
-
-- **SQLite Interface**
-  Create and inspect user tables, execute parameterized SQL, browse records, and use supported DDL without exposing KiDB's internal tables.
-
-- **Local and S3 Storage**
-  Run entirely from local disk or use S3-compatible object storage with local hydration, WAL replication, snapshots, synchronization, and safe recovery.
-
-- **Write Coordination**
-  Per-database write coordinators serialize concurrent mutations. Requests can wait for a committed result or use asynchronous acknowledgment for higher throughput.
-
-- **Backup and Recovery**
-  Create manual or scheduled compressed backups, retain versioned snapshots, restore by backup ID, tag, timestamp, or latest version, and apply configurable retention policies.
-
-- **Asynchronous Jobs**
-  Long-running imports, exports, backups, maintenance, FTS indexing, and administrative work execute through a unified background job system.
-
-- **JSONL Import and Export**
-  Stream large local or S3-hosted JSONL datasets with compression, resumable offsets, conflict handling, field mapping, progress tracking, and worker recovery.
-
-- **Full-Text Search**
-  Search document content through SQLite FTS5 with namespace filters, pagination, projections, sorting, and background indexing.
-
-- **Automatic Indexing**
-  Query heatmaps identify frequently filtered or sorted JSON paths and create bounded expression indexes automatically. Indexes can also be managed manually.
-
-- **Document Lookups**
-  Resolve one-to-one and one-to-many relationships across namespaces using nested, dependency-aware lookups with concurrent DAG execution.
-
-- **Metrics Event Store**
-  Ingest application events and query counts, sums, averages, minimums, maximums, distinct values, time buckets, and grouped dimensions.
-
-- **Identity Store**
-  Manage users, profile information, statuses, external authentication providers, tokens, password-change requirements, bans, and lifecycle events without imposing an authentication protocol.
-
-- **File Catalog**
-  Track file identity, ownership, storage location, content type, hashes, upload timestamps, metadata, expiration, and deletion state for files stored by the application.
-
-- **Audit Logs**
-  Record and query structured audit events by actor, action, target, status, source, request ID, and timestamp.
-
-- **Lifecycle Management**
-  Support soft deletion, archival, hard purge, restoration, namespace changes, TTL expiration, database reaping, vacuuming, and statistics recomputation.
-
-- **System Catalog and Monitoring**
-  Maintain cross-database inventory, lifecycle events, historical database statistics, active connection state, process memory, request counts, latency, and rolling instance metrics.
-
-- **Built-In Admin Interface**
-  Manage multiple KiDB connections and databases through a React interface for DocumentDB, SQLiteDB, Identity, Files, Metrics, Search, Audit Logs, jobs, backups, and system monitoring.
-
-- **Simple Security Model**
-  Protect API, documentation, and administration routes with an access key, while supporting an explicit no-auth mode for trusted local development.
-
-## Deployment Models
-
-KiDB can run as:
-
-- An embedded local database service
-- A self-hosted Docker application with persistent volumes
-- A serverless container with S3-backed durable storage
-- A lightweight database gateway for SaaS applications
-- A development and administration layer over SQLite data
-
-KiDB's goal: one compact service for common application data needs, without giving up SQLite's portability, reliability, and direct SQL access.
-
----
-
-
-## Quick Start
+## Install and run
 
 ```bash
 docker run -d \
-  --name kongo \
-  -p 8080:8080 \
-  -e KONGODB_ACCESS_KEY=change-me \
-  -v kongo-data:/data \
-  kongo
+  --name kokoadb \
+  -p 6543:6543 \
+  -e KOKOADB_ACCESS_KEY=dev-secret \
+  -v kokoadb-data:/data \
+  kokoadb
 ```
 
-Check it's alive:
+Everything durable — database files, local backups, local exports — lives under `/data`.
+
+Verify the service:
 
 ```bash
-curl http://localhost:8080/_/kdb/ping
+curl http://localhost:6543/_/kdb/ping
 ```
 
-Send your first request:
+Write a document:
 
 ```bash
-curl -X POST http://localhost:8080/_/kdb/gateway \
+curl -X POST http://localhost:6543/_/kdb/gateway \
   -H 'content-type: application/json' \
-  -H 'x-access-key: change-me' \
-  -d '{"db":"app/main","operation":"create_db","payload":{}}'
+  -H 'x-access-key: dev-secret' \
+  -d '{"db":"myapp/main","operation":"insert","namespace":"users","payload":{"data":{"name":"Ada"}}}'
 ```
 
-Open the Admin UI at `http://localhost:8080/_/kdb/admin/` (username `kongo`, password is your access key).
+The database and namespace are created by the insert. Only `create_db`, `insert`, and `import_jsonl` can create a database; every other operation fails on a missing one.
 
----
+The Admin UI is at `http://localhost:6543/_/kdb/admin/`. When authentication is enabled, the browser prompts for HTTP Basic credentials: username `kongodb`, password `KOKOADB_ACCESS_KEY`.
 
-## API Surface
+See [Quickstart](DOCUMENTATION.md#quickstart) for TypeScript and Python client wrappers.
 
-### Endpoints
+## HTTP endpoints
 
-| Route | Purpose |
+All routes sit under `KOKOADB_BASE_PATH` (default `/_/kdb`).
+
+| Method | Route | Purpose | Auth |
+|---|---|---|---|
+| `POST` | `/gateway` | All operations. | `X-Access-Key` |
+| `GET` | `/ping` | Service health and version. | Open |
+| `GET` | `/meta/operations` | Machine-readable operation catalog. | `X-Access-Key` |
+| `GET` | `/doc` | Rendered Markdown documentation. | Basic |
+| `GET` | `/admin/` | Admin UI, when enabled. | Basic |
+
+`KOKOADB_AUTH_MODE=access_key` requires a non-empty `KOKOADB_ACCESS_KEY`. `KOKOADB_AUTH_MODE=none` disables authentication for trusted local development. HTTP Basic credentials are only transport-safe behind TLS.
+
+## Request envelope
+
+Every operation is a `POST` to `/gateway` using the same four fields:
+
+```json
+{
+  "db": "myapp/main",
+  "operation": "query",
+  "namespace": "users",
+  "payload": { "filter": {"status": "active"} }
+}
+```
+
+| Field | Description |
 |---|---|
-| `POST ${KONGODB_BASE_PATH}/gateway` | The one true endpoint — all operations go here (default path: `/gateway`) |
-| `GET ${KONGODB_BASE_PATH}/ping` | Health check + version |
-| `GET ${KONGODB_BASE_PATH}/meta/operations` | Machine-readable catalog of every operation |
-| `GET ${KONGODB_BASE_PATH}/doc` | Rendered docs (this file, essentially) |
-| `GET ${KONGODB_BASE_PATH}/admin/` | Built-in Admin UI (SPA), toggle with `KONGODB_ADMIN_UI_ENABLED` |
+| `db` | Database path, such as `myapp/main`. Required except for global operations. |
+| `operation` | Operation name. |
+| `namespace` | Document grouping. Required, optional, or rejected depending on the operation. |
+| `payload` | Filters, data, and operation options. |
 
-### Auth
+Namespace selectors: `"users"` reads one namespace, `["users","admins"]` reads several, `"*"` reads all. Writes always target exactly one concrete namespace. An optional shorthand folds the selector into the operation name: `"query::users"`, `"query::*"`, `"query::users,admins"`.
 
-- Send `X-Access-Key: <key>` on every request.
-- Browser access to `/doc` and `/admin/` uses HTTP Basic — username `kongo`, password = `KONGODB_ACCESS_KEY`.
-- Use HTTPS outside localhost — Basic auth credentials are only safe over TLS.
-- `KONGODB_AUTH_MODE=access_key` requires `KONGODB_ACCESS_KEY`; use `KONGODB_AUTH_MODE=none` only for trusted local development.
-- `/ping` is always open. `/meta/operations` can be locked down with `KONGODB_META_REQUIRES_AUTH=true`.
+Responses:
 
----
-
-## Request / Response Contract
-
-### Request envelope
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": ["users", "admins"],
-  "payload": {}
-}
+```jsonc
+{ "status": "success", "data": {}, "committed": true, "is_async_ack": false }
+{ "status": "partial", "data": { "succeeded": 1, "failed": 1, "results": [] } }  // batch operations only
+{ "status": "error",   "error": "reason" }
 ```
 
-### The rules of the road
+Full rules for namespace policy, validation, errors, pagination, and caching are in [Request and response contract](DOCUMENTATION.md#request-and-response-contract).
 
-- `db` is required everywhere except global, db-list-style operations.
-- `namespace` is the only public selector. Use a string for one namespace or an array for several.
-- Shorthand alias works too: `"operation": "query::users"` → `operation=query`, `namespace=users`. Same for `query::*` and `query::users,admins,teams`. Shorthand can't be mixed with top-level `namespace`.
-- Namespace requirements by operation type:
-  - **Required:** `insert`, `query`
-  - **Insert-family:** must be a single concrete namespace — no `*` or array
-  - **ID-targeted writes** (`update`, `delete`): namespace optional, strict if given
-  - **Global ID reads:** `query` with `namespace="*"` and `_id`/`_id.$in` in `filter`
-  - **Filter/wide ops:** namespace required unless `scope=all` is explicitly supported and set
-- `namespace: "*"` is shorthand for `payload.scope: "all"` (conflicts with `payload.scope: "namespace"`).
-- Only three operations can create a brand-new db: `create_db`, `insert`, `import_jsonl`.
+## Operations
 
-### Success response
+### Documents
 
-```json
-{
-  "status": "success",
-  "data": {},
-  "_txn_id": "optional",
-  "message": "optional",
-  "committed": true,
-  "is_async_ack": false,
-  "ack_mode": "optional (accepted path)",
-  "ack_status": "optional (accepted path)"
-}
-```
+| Operation | Description |
+|---|---|
+| `insert` | Create one or many documents. Creates the database and namespace when absent. |
+| `update` | Patch by explicit `_id`, by id array, or by filter. Never inserts. |
+| `upsert` | Update filter matches, or insert one document when none exist. |
+| `query` | General read: filters, sort, pagination, projection, FTS, lookups, compute, user attachments. |
+| `multi_query` | Several independent read-only queries in one request. |
+| `count` | Number of matching documents only. |
+| `aggregate` | Set-level counts, sums, averages, extrema, and distinct values. |
+| `delete` | Soft-delete into the archive, or `purge: true` to remove permanently. |
+| `set_ttl` | Schedule or clear document expiration. |
+| `transaction` | Insert, update, upsert, and delete children in one SQL transaction. |
 
-### Error response
+Operators: [filter](DOCUMENTATION.md#filter-operators) (`$eq`, `$in`, `$elemMatch`, `$regex`, `[]` wildcards), [compute](DOCUMENTATION.md#compute-operators) (`$sum`, `$distinct`, `$join`), [generator](DOCUMENTATION.md#generator-operators) (`@now`, `@uuidv7`, `@hash`), [mutation](DOCUMENTATION.md#mutation-operators) (`$inc`, `$push`, `$addset`, `$rename`), [lookup match](DOCUMENTATION.md#lookup-operators) (`$eq`, `$in`, `$contains`, `$overlap`).
 
-```json
-{
-  "status": "error",
-  "error": "reason"
-}
-```
+### Document lifecycle
 
-### Datetimes
+Named, durable, one-time conditional mutations evaluated at a scheduled time.
 
-All system timestamps are UTC, RFC3339/ISO-8601 with timezone.
+| Operation | Description |
+|---|---|
+| `schedule_transition` | Create or replace a named scheduled conditional mutation. |
+| `get_transition`, `list_transitions` | Inspect and paginate transition history. |
+| `cancel_transition` | Cancel one pending transition, retaining it as history. |
+| `retry_transition` | Reopen a failed transition. Failures do not retry automatically. |
 
-```
-2025-12-24T23:39:26Z
-2025-12-24T23:39:26.873397+00:00
-```
+### Import, export, and jobs
 
-If `_created_at` is given without `_modified_at`, the latter inherits the former.
-
----
-
-## The KiDB Stack
-
-KiDB's operations are grouped into stacks. Each one covers a distinct slice of what your app needs. Every operation below includes a full, ready-to-send example.
-
-### DocumentDB (Data Stack)
-
-The bread and butter — documents in, documents out.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `insert` | `namespace`, `data` | Insert one or many docs. Supports `unique_fields` + `on_conflict` for soft dedupe. |
-| `update` | `data(with _id)` or `filter + data` or `data(array)` | Patch one doc, many by filter, or many by explicit ids. `replace=true` only works single-doc. |
-| `upsert` | `namespace`, `filter`, `insert_data` | Update on match, insert on miss; exact `_id` filters preserve that id. |
-| `count` | — | Count matches, filter optional. |
-| `query` | `namespace` string/array/`*` | Filter, sort, paginate, project, lookup, per-row compute, or FTS with `payload.search`. |
-| `multi_query` | `payload.operations[]` | Run several aliased, independent document queries against one database in one read-only request. |
-| `aggregate` | `compute` | Set-level metrics: `$count`, `$sum`, `$avg`, `$min`, `$max`, `$distinct`. |
-| `delete` | one of `id` / `ids` / `filter` | Soft-delete to archive by default; `purge=true` hard-deletes. |
-| `set_ttl` | `ids`/`filter` + `ttl_seconds` | Set or reset a document's TTL. |
-| `schedule_transition` | Document, name, time, condition, update | Schedule or replace a named future conditional document mutation. |
-| `cancel_transition` | Transition selector | Cancel a pending transition. |
-| `get_transition` / `list_transitions` | Optional selectors | Inspect lifecycle state and history. |
-| `retry_transition` | Failed transition selector | Explicitly reopen a failed transition. |
-| `import_jsonl` | `namespace`, `source_path` | Enqueue a background JSONL import job. |
-| `export_jsonl` | — | Enqueue a background JSONL export job. |
-
-**`insert`** — one or many documents:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "insert",
-  "namespace": "users",
-  "payload": {
-    "data": [
-      {
-        "email": "a@b.com",
-        "name": "Ada"
-      },
-      {
-        "email": "b@b.com",
-        "name": "Bob"
-      }
-    ],
-    "unique_fields": ["email"],
-    "on_conflict": "skip"
-  }
-}
-```
-
-**`update`** — patch many documents by filter:
-
-`data._user_id` and `data._metadata` are rejected; use `payload.user_id` or `payload.metadata` for a single explicit-ID update. `_namespace` in update data is discarded. `_created_at` and `_modified_at` are rejected unless `payload.allow_system_timestamps:true`; opted-in values must be RFC3339 and are normalized to UTC. Upsert-update and lifecycle patches do not permit timestamp overrides.
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "update",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "plan": {
-        "$eq": "trial"
-      }
-    },
-    "data": {
-      "plan": "pro"
-    },
-    "max_docs": 100
-  }
-}
-```
-
-**`upsert`** — update on match, insert on miss:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "upsert",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "email": {
-        "$eq": "a@b.com"
-      }
-    },
-    "insert_data": {
-      "email": "a@b.com",
-      "name": "Ada"
-    },
-    "update_data": {
-      "last_seen": {
-        "@now": true
-      }
-    }
-  }
-}
-```
-
-**`query`** — fetch explicit ids globally:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": "*",
-  "payload": {
-    "filter": { "_id": { "$in": ["u1", "u2"] } },
-    "fields": ["name", "email"]
-  }
-}
-```
-
-**`count`** — count matches:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "count",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "status": {
-        "$eq": "active"
-      }
-    }
-  }
-}
-```
-
-**`query`** — filter, sort, project, and compute:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "status": {
-        "$eq": "active"
-      }
-    },
-    "sort": "profile.age desc, name",
-    "fields": ["name", "profile.age"],
-    "compute": {
-      "full_name": {
-        "$join": ["$name", " (", "$profile.age", ")"]
-      }
-    },
-    "limit": 20
-  }
-}
-```
-
-**`aggregate`** — set-level compute:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "aggregate",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "status": {
-        "$eq": "active"
-      }
-    },
-    "compute": {
-      "total": {
-        "$count": "*"
-      },
-      "avg_age": {
-        "$avg": "age"
-      },
-      "unique_countries": {
-        "$distinct": "country"
-      }
-    }
-  }
-}
-```
-
-**`delete`** — soft-delete many documents by filter:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "delete",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "status": {
-        "$eq": "inactive"
-      }
-    },
-    "max_docs": 100
-  }
-}
-```
-
-**`set_ttl`** — expire a document after a set time:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "set_ttl",
-  "namespace": "users",
-  "payload": {
-    "ids": ["u1"],
-    "ttl_seconds": 600,
-    "expiry_behavior": "archive"
-  }
-}
-```
-
-**`import_jsonl`** — enqueue a background import job:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "import_jsonl",
-  "namespace": "users",
-  "payload": {
-    "source_path": "s3://bucket/path/users.jsonl.zst",
-    "on_conflict": "skip",
-    "batch_size": 500
-  }
-}
-```
-
-**`export_jsonl`** — enqueue a background export job:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "export_jsonl",
-  "namespace": "users",
-  "payload": {
-    "target_path": "s3://bucket/exports/users",
-    "compress": true,
-    "filter": {
-      "status": {
-        "$eq": "active"
-      }
-    }
-  }
-}
-```
-
----
+| Operation | Description |
+|---|---|
+| `import_jsonl` | Streaming, resumable JSONL ingestion from local storage or S3. |
+| `export_jsonl` | Filtered, projection-aware JSONL export. |
+| `create_import_upload_url` | Presigned S3 `PUT` for a browser-side import upload. |
+| `create_download_url` | Presigned S3 `GET` for a completed export, backup, or snapshot. |
+| `get_job`, `list_jobs`, `continue_job`, `abort_job` | Shared background job control. |
 
 ### Identity
 
-Stores login-related metadata for your app. **KiDB does not authenticate anyone** — no password checks, no OAuth validation, no session issuing. It just stores the data your auth layer needs.
+Stores login-related metadata. Kokoadb does not authenticate users; see [Scope and boundaries](#scope-and-boundaries).
 
-| Op | Needs | What it does |
-|---|---|---|
-| `user_create` | — | Create a user record (email, username, profile, provider link, `data`). |
-| `user_get` | `user_id`/`id`/`email`/`username` or `provider`+`provider_user_id` | Fetch one user. |
-| `user_get_details` | same selectors | Fetch a user plus linked providers and recent events. |
-| `user_query` | — | Paginated user search/list, including Filter Operators on `data.*`. |
-| `user_update` | `user_id`/`id` | Update profile fields + `data`. |
-| `user_update_status` | `user_id`/`id`, `status` | Set status, optionally schedule an automatic future transition. |
-| `user_delete` | `user_id`/`id` | Soft-delete (revokes tokens, keeps identity reserved) or `purge=true` to hard-delete everything. |
-| `user_create_token` | `user_id`/`id`, `kind`, `token_hash` | Store an app-generated token hash (resets, magic links, API keys...). |
-| `user_link_provider` | `user_id`/`id`, `provider`, `provider_user_id` | Link a Google/GitHub/custom identity to an existing user. |
-| `user_unlink_provider` | `provider`, `provider_user_id` | Unlink a provider identity; optional `user_id` makes it strict. |
-
-**Rule of thumb:** store `password_hash`, never raw passwords. Store `token_hash`, never raw tokens.
-
-**`user_create`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_create",
-  "payload": {
-    "email": "user@example.com",
-    "username": "mardix",
-    "first_name": "Mardix",
-    "last_name": "Example",
-    "profile_photo": "s3://app-files/avatars/user.png",
-    "password_hash": "$argon2id$...",
-    "password_algo": "argon2id",
-    "requires_password_change": true,
-    "data": {
-      "display_name": "Mardix",
-      "role": "admin"
-    }
-  }
-}
-```
-
-**`user_get`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_get",
-  "payload": {
-    "email": "user@example.com"
-  }
-}
-```
-
-**`user_get_details`** — user plus linked providers and recent events:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_get_details",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001"
-  }
-}
-```
-
-**`user_query`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_query",
-  "payload": {
-    "search": "gmail.com",
-    "status": "active",
-    "filter": {
-      "data.plan": {"$in": ["pro", "enterprise"]}
-    },
-    "page": 1,
-    "per_page": 25
-  }
-}
-```
-
-**`user_update`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_update",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "requires_password_change": false
-  }
-}
-```
-
-**`user_update_status`** — ban for two days, then auto-return to active:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_update_status",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "status": "banned",
-    "status_reason": "abuse",
-    "status_expires_in": 172800,
-    "status_next": "active",
-    "status_next_reason": "temporary ban expired",
-    "changed_by": "admin:42"
-  }
-}
-```
-
-**`user_delete`** — soft delete:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_delete",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "status_reason": "user requested deletion"
-  }
-}
-```
-
-**`user_create_token`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_create_token",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "kind": "password_reset",
-    "token_hash": "sha256:abc123...",
-    "expires_in": 300
-  }
-}
-```
-
-**`user_link_provider`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_link_provider",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "provider": "github",
-    "provider_user_id": "827364",
-    "email": "user@example.com",
-    "data": {
-      "login": "octocat"
-    }
-  }
-}
-```
-
-**`user_unlink_provider`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "user_unlink_provider",
-  "payload": {
-    "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "provider": "github",
-    "provider_user_id": "827364"
-  }
-}
-```
-
----
+| Operation | Description |
+|---|---|
+| `user_create`, `user_get`, `user_query`, `user_update`, `user_delete` | User records and search. |
+| `user_get_details` | One user with providers, login methods, and recent lifecycle events. |
+| `user_update_password` | Atomically replace an application-generated password hash. |
+| `user_update_status` | Change status immediately or schedule a future transition. |
+| `user_create_token`, `user_get_token`, `user_consume_token`, `user_revoke_token` | Token hashes with atomic single-use consumption. |
+| `user_link_provider`, `user_unlink_provider` | External identity provider links. |
 
 ### Files
 
-Metadata only — KiDB never touches the actual bytes. Your app still owns uploading/downloading to S3, disk, etc.
+Metadata registry for objects the application stores elsewhere.
 
-| Op | Needs | What it does |
-|---|---|---|
-| `file_create` | `storage_backend`, `storage_path` | Register a file/object's metadata. |
-| `file_get` | `id` | Fetch one file record. |
-| `file_query` | — | List/search by dedicated fields and Filter Operators on `metadata.*`. |
-| `file_update` | `id` | Update mutable metadata. |
-| `file_delete` | `id` | Soft-delete by default; `purge=true` hard-deletes the row. |
-
-**`file_create`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "file_create",
-  "payload": {
-    "bucket": "avatars",
-    "storage_backend": "s3",
-    "storage_path": "s3://app-files/uploads/users/u123/avatar.png",
-    "filename": "avatar.png",
-    "content_type": "image/png",
-    "size_bytes": 182331,
-    "sha256": "abc123...",
-    "owner_type": "user",
-    "owner_id": "u123",
-    "metadata": {
-      "width": 512,
-      "height": 512
-    }
-  }
-}
-```
-
-**`file_get`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "file_get",
-  "payload": {
-    "id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001"
-  }
-}
-```
-
-**`file_query`** — all files attached to a user:
-
-```json
-{
-  "db": "app/main",
-  "operation": "file_query",
-  "payload": {
-    "owner_type": "user",
-    "owner_id": "u123",
-    "status": "active",
-    "filter": {
-      "metadata.tags": {"$includes": "avatar"}
-    },
-    "page": 1,
-    "per_page": 25
-  }
-}
-```
-
-**`file_update`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "file_update",
-  "payload": {
-    "id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "metadata": {
-      "width": 1024,
-      "height": 1024,
-      "variant": "retina"
-    }
-  }
-}
-```
-
-**`file_delete`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "file_delete",
-  "payload": {
-    "id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
-    "purge": false
-  }
-}
-```
-
----
-
-### SQLiteDB (SQL Stack)
-
-The escape hatch when document operations and Filter Operators are not enough. `sql_execute` uses the same gateway authentication as other operations.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `sql_execute` | `sql` | One statement: `SELECT`/`WITH`/`EXPLAIN`/`INSERT`/`UPDATE`/`DELETE`/`REPLACE`, plus limited DDL (`CREATE TABLE`/`CREATE INDEX`/`DROP INDEX`/`ALTER TABLE ... ADD COLUMN`). Blocks `__kdb_*` and `sqlite_*` objects. |
-| `sql_list_tables` | — | List your own SQL tables (internal tables excluded). |
-| `sql_get_table_schema` | `table` | Safe `PRAGMA table_info` wrapper — arbitrary `PRAGMA` is not allowed. |
-
-**`sql_execute`** — parameterized query:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "sql_execute",
-  "payload": {
-    "sql": "SELECT id, email FROM users ORDER BY id LIMIT 25",
-    "params": []
-  }
-}
-```
-
-**`sql_list_tables`**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "sql_list_tables",
-  "payload": {}
-}
-```
-
-**`sql_get_table_schema`**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "sql_get_table_schema",
-  "payload": {
-    "table": "customers"
-  }
-}
-```
-
----
-
-### FTS (Full-Text Search)
-
-Full-text search is a `query` mode over live documents, powered by SQLite FTS5. Enable access and build the index before querying.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `query` with `payload.search` | `namespace` + `search` | Full-text search (FTS5) over live docs, with filter/sort/pagination/projection/lookup. |
-| `enable_fts_index` | — | Toggle the db-level FTS accessibility flag. |
-| `reindex_fts` | — | Enqueue an async FTS rebuild/backfill job. |
-| `drop_fts_index` | — | Enqueue an async FTS drop job. |
-
-**FTS query**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": "users",
-  "payload": {
-    "search": "ada",
-    "filter": {
-      "status": {
-        "$eq": "active"
-      }
-    },
-    "fields": ["name", "email"],
-    "limit": 10
-  }
-}
-```
-
-**`enable_fts_index`**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "enable_fts_index",
-  "payload": {
-    "enable": true
-  }
-}
-```
-
-**`reindex_fts`**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "reindex_fts",
-  "payload": {}
-}
-```
-
-**`drop_fts_index`**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "drop_fts_index",
-  "payload": {}
-}
-```
-
----
-
-### Transaction
-
-Run multiple insert, update, upsert, and delete operations inside one SQL transaction. The default is atomic all-or-nothing execution, with an explicit partial continuation mode when needed.
-
-`payload.on_error` defaults to `fail`, which rolls back the entire transaction on the first child error. Set it to `continue` for savepoint-isolated children: failed operations are rolled back individually, successful operations commit together, and the response is `partial`. Nested inserts default `on_conflict` to `error`; use `on_conflict:"skip"` explicitly for an expected uniqueness no-op.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `transaction` | `payload.operations[]` | Run `insert`/`update`/`upsert`/`delete` in one SQL transaction, with fail-fast atomicity or savepoint-isolated continuation. |
-
-**`transaction`**:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "transaction",
-  "payload": {
-    "operations": [
-      {
-        "operation": "insert",
-        "namespace": "users",
-        "payload": {
-          "data": {
-            "_id": "u1",
-            "name": "Ada"
-          }
-        }
-      },
-      {
-        "operation": "update",
-        "namespace": "users",
-        "payload": {
-          "data": {
-            "_id": "u1",
-            "plan": "pro"
-          }
-        }
-      },
-      {
-        "alias": "ensure-profile",
-        "operation": "upsert",
-        "namespace": "profiles",
-        "payload": {
-          "filter": {"user_id": "u1"},
-          "insert_data": {"user_id": "u1", "visits": 1},
-          "update_data": {"visits": {"$inc": 1}},
-          "max_docs": 1
-        }
-      }
-    ]
-  }
-}
-```
-
-Nested upserts see earlier writes in the same transaction. Their result entry includes `data.action` (`inserted`, `updated`, or `no_change`) and the affected documents/counts.
-
----
-
-### Metrics
-
-A lightweight, append-only events engine for SaaS-style metrics (API calls, signups, whatever you want to count).
-
-| Op | Needs | What it does |
-|---|---|---|
-| `metrics_ingest` | `events[]` | Append events. Defaults to a fast queued ack (`commit:true` to wait for durability). |
-| `metrics_query` | `event`/`events`, `range` or `start`+`end`, `metrics` | Aggregate events into labeled, bucketed results. |
-| `metrics_catalog` | — | List discovered event names and their dimension paths. |
-
-Rolling ranges: `24h`, `7d`, `3days`, `2weeks`, `4months`, `1year`.
-Calendar ranges: `today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `this_year`, `last_year`.
-Metric ops: `count`, `sum`, `avg`, `min`, `max`, `distinct`, `count_distinct`.
-
-**`metrics_ingest`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "metrics_ingest",
-  "payload": {
-    "events": [
-      {
-        "event": "api.request",
-        "tenant_id": "tenant_123",
-        "user_id": "user_456",
-        "value": 1,
-        "dimensions": {
-          "endpoint": "/v1/chat",
-          "method": "POST",
-          "status": 200,
-          "duration_ms": 183
-        },
-        "metadata": {
-          "request_id": "req_abc"
-        }
-      }
-    ]
-  }
-}
-```
-
-**`metrics_query`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "metrics_query",
-  "payload": {
-    "alias": "api_requests",
-    "label": "API Requests",
-    "event": "api.request",
-    "range": "24h",
-    "interval": "hour",
-    "bucket_label": "{{bucket HH:mm}}",
-    "filter": {
-      "tenant_id": "tenant_123"
-    },
-    "metrics": [
-      {
-        "op": "count",
-        "field": "*",
-        "alias": "requests",
-        "label": "Requests"
-      },
-      {
-        "op": "avg",
-        "field": "dimensions.duration_ms",
-        "alias": "avg_duration_ms",
-        "label": "Avg duration"
-      }
-    ]
-  }
-}
-```
-
-**`metrics_catalog`** — list dimensions for one event:
-
-```json
-{
-  "db": "app/main",
-  "operation": "metrics_catalog",
-  "payload": {
-    "type": "dimension",
-    "name": "api.request"
-  }
-}
-```
-
----
-
-### Audit Logs
-
-Append-only, immutable activity logging. KiDB doesn't infer who did what — your app explicitly records the events worth keeping.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `audit_ingest` | `events[]` (each needs `action`) | Record one or more audit events. Defaults to committed (durable) ack. |
-| `audit_query` | — | Search/filter by action, actor, target, status, source, time range. |
-
-**`audit_ingest`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "audit_ingest",
-  "payload": {
-    "commit": true,
-    "events": [
-      {
-        "action": "user.login",
-        "actor_type": "user",
-        "actor_id": "user_123",
-        "target_type": "session",
-        "target_id": "session_456",
-        "status": "success",
-        "source": "api",
-        "request_id": "req_789",
-        "ip_address": "203.0.113.10",
-        "message": "User signed in with Google",
-        "data": {
-          "provider": "google"
-        }
-      }
-    ]
-  }
-}
-```
-
-**`audit_query`**:
-
-```json
-{
-  "db": "app/main",
-  "operation": "audit_query",
-  "payload": {
-    "action": "user.login",
-    "actor_id": "user_123",
-    "start": "2026-07-01",
-    "end": "2026-07-31",
-    "page": 1,
-    "per_page": 25
-  }
-}
-```
-
----
-
-### Advanced (Database, Jobs, Admin, Namespace)
-
-Instance- and database-level operations: lifecycle, replication, background job control, and introspection. These are used less often day-to-day, so they're grouped together here rather than given a full example per operation.
-
-#### Database
-
-Whole-database lifecycle: create, replicate, back up, restore, maintain.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `create_db` | — | Initialize the db at its path. |
-| `db_exists` | — | Check existence (remote-aware in S3 mode). |
-| `load_db` / `offload_db` | — | (S3 mode) Preload into memory / flush & unload. |
-| `sync_db` / `create_snapshot` | — | Force a snapshot + manifest sync. |
-| `list_snapshots` / `restore_snapshot` | `snapshot_id` optional | List or restore versioned snapshots. |
-| `get_sync_status` / `verify_db` | — | Check sync state / verify manifest integrity. |
-| `compact_wal` | `retain_segments` optional | Compact the WAL segment list. |
-| `clone_db` | `to_db_path` | Clone the current db elsewhere. |
-| `create_backup` | — | Enqueue a backup job. |
-| `restore_backup` | one of `backup_db_path`/`backup_id`/`backup_tag`/`backup_at`/`latest` | Restore from a backup. |
-| `list_backups` / `tag_backup` | — | Browse and tag the backup catalog. |
-| `vacuum_db` | — | Run SQLite `VACUUM`. |
-| `reap_db` | — | Trigger TTL/archive cleanup and due document lifecycle transitions immediately. |
-
-#### Jobs
-
-Every long-running task (import, export, FTS rebuilds...) runs as a background job you can inspect and control.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `get_job` | `job_id` | One job's status/details. |
-| `list_jobs` | — | List with optional `job_type`/`status` filters. |
-| `continue_job` | `job_id` | Resume/retry a resumable or failed job. |
-| `abort_job` | `job_id` | Cancel a running/queued job. |
-
-#### Admin / System
-
-Instance-level introspection, inventory, and index controls.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `list_commands` | — | Every supported operation name. |
-| `list_dbs` / `list_all_dbs` | — | Loaded dbs / all known dbs. |
-| `system_get_inventory` / `system_refresh_inventory` | — | Read or rebuild the system catalog. |
-| `system_get_db_status` | `db` | Live status + catalog row for one db. |
-| `system_snapshot_db_stats` / `system_query_db_stats` | — | Persist or query historical db stats. |
-| `system_list_db_events` | — | DB lifecycle/error events. |
-| `get_system_stats` / `system_memory` | — | Instance uptime, request counters, memory, queues. |
-| `cleanup_temp_artifacts` | — | Remove stale temp files. |
-| `get_system_config` / `get_db_stats` | — | Per-db config values / live counters. |
-| `create_index` | `index_path` | Create a manual JSON index. |
-| `drop_index` | `index_name`/`index_path` | Drop an index. |
-| `list_indexes` | — | List all indexes. |
-
-#### Namespace
-
-Manage whole namespaces as units instead of individual documents.
-
-| Op | Needs | What it does |
-|---|---|---|
-| `list_namespaces` | — | List namespaces + stats. |
-| `get_namespace_stats` | `namespace` | Live/archive stats for one namespace. |
-| `get_data_count` | — | Exact counts for documents/namespaces, users, files, metric events, and every user-created SQL table. |
-| `recompute_stats` | — | Rebuild global stats. |
-| `drop_namespace` | `namespace` | Archive + delete, or hard-delete with `purge=true`. |
-| `restore_archive` | `txn_id` / `ids` / `namespace + filter` | Restore from archive (`skip`/`replace`/`patch` conflict policy). |
-| `purge_archive` | same selectors | Hard-delete from archive only. |
-| `change_namespace` | `from_namespace`, `to_namespace` | Move docs between namespaces. |
-| `rename_namespace` | `from_namespace`, `to_namespace` | Rename across live + archive data. |
-
----
-
-## Filter Operators, Compute Operators & Lookup Operators
-
-### Filter Operators (`payload.filter`)
-
-| Family | Operators |
+| Operation | Description |
 |---|---|
-| Logical | `$and`, `$or`, `$nor`, `$not` |
-| Comparison | `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$between`, `$exists` |
-| Set / array | `$in`, `$nin`, `$includes`, `$nincludes`, `$all`, `$any`, `$none`, `$elemMatch`, `$size` |
-| String | `$startsWith`, `$endsWith`, `$contains`, `$ilike`, `$istartsWith`, `$iendsWith`, `$icontains`, `$regex` |
-| Type | `$type` |
+| `file_create`, `file_get`, `file_query`, `file_update`, `file_delete` | File metadata records and search. |
 
-```json
-{
-  "$and": [
-    {
-      "status": {
-        "$in": ["active", "trial"]
-      }
-    },
-    {
-      "$or": [
-        {
-          "plan": {
-            "$eq": "pro"
-          }
-        },
-        {
-          "plan": {
-            "$eq": "enterprise"
-          }
-        }
-      ]
-    }
-  ]
-}
-```
+### Metrics and audit
 
-### Compute Operators (`payload.compute`)
-
-- **Aggregate (set-level):** `$count`, `$sum`, `$avg`, `$min`, `$max`, `$distinct` — with `$distinct: true` and metric-local `$filter`.
-- **Query (per-row):** all of the above, plus `$size` and `$join`. Any `$`-prefixed string token in `$join` is a path on the current row (e.g. `$profile.email`).
-
-### Lookup Operators (`payload.lookups`)
-
-Join in related data, keyed by alias:
-
-```json
-{
-  "lookups": {
-    "books": {
-      "from": "books",
-      "local_field": "favorite_books[]",
-      "foreign_field": "_id",
-      "match": "$in",
-      "multi": true,
-      "fields": ["_id", "title"]
-    }
-  }
-}
-```
-
-Supports nested lookups, context selectors (`$self`, `$parent`, `$root`, `$lookup.<alias>`), and options like `filter`, `sort`, `limit`, `dedupe`, `on_missing`.
-
----
-
-## Generator Operators & Mutation Operators
-
-Recognized inside `data`, `insert_data`, and `update_data`. Generators use exact known single-key `@` directive objects; mutations use exact single-key `$` operator objects.
-
-**Generator Operators** — exact known `@` directives that create values at write time:
-`@now`, `@timestamp`, `@uuidv4`, `@uuidv7`, `@randomid`, `@hash`
-
-| Generator | Options |
+| Operation | Description |
 |---|---|
-| `@now` | Signed `days`, `hours`, `minutes`, `seconds`; optional Chrono/strftime `format`. Defaults to UTC RFC3339. |
-| `@timestamp` | Signed `days`, `hours`, `minutes`, `seconds`. Returns Unix milliseconds. |
-| `@uuidv4`, `@uuidv7` | `prefix`, `suffix`, and `dash` (default `false`). |
-| `@randomid` | `len` (`1`-`128`), `alphabet` (`hex`, `numeric`, `base32`, `base62`), `prefix`, and `suffix`. |
-| `@hash` | Required string `value`; `algo:"sha256"`, `len` (`1`-`64`), `prefix`, and `suffix`. |
+| `metrics_ingest` | Append application metric events. |
+| `metrics_query` | Bucketed and grouped aggregation over rolling or calendar ranges. |
+| `metrics_catalog` | Discover registered event names and dimension paths. |
+| `audit_ingest` | Append immutable audit events. |
+| `audit_query` | Search the audit timeline by actor, action, target, status, source, and time. |
 
-Common `@now.format` tokens include `%Y` year, `%m` month, `%d` day, `%H` hour, `%M` minute, `%S` second, `%F` ISO date, `%T` time, `%.3f` milliseconds, `%:z` offset, and `%+` RFC3339. See `DOCUMENTATION.md` for the complete generator option and alphabet reference.
+### SQL and search
 
-**Mutation Operators** — modify existing values in place:
-`$replace`, `$unset`, `$inc`, `$push`, `$pop`, `$extend`, `$pull`, `$addset`, `$rename`
+| Operation | Description |
+|---|---|
+| `sql_execute` | One parameterized read, write, or limited DDL statement. |
+| `sql_list_tables`, `sql_get_table_schema` | Table discovery and safe schema inspection. |
+| `create_index`, `drop_index`, `list_indexes` | Manual JSON expression indexes. |
+| `enable_fts_index`, `reindex_fts`, `drop_fts_index` | Full-text search lifecycle. |
 
-`user_update.data` and `file_update.metadata` use the same patch behavior. Use `$replace` at the root or any nested path when the complete object must be replaced.
+### Namespaces
 
-```json
-{
-  "data": {
-    "_id": {
-      "@uuidv4": {
-        "prefix": "session:"
-      }
-    },
-    "created_at": {
-      "@now": true
-    },
-    "score": {
-      "$inc": 1
-    },
-    "tags": {
-      "$addset": "beta"
-    },
-    "profile.legacy_name": {
-      "$rename": "profile.display_name"
-    }
-  }
-}
+| Operation | Description |
+|---|---|
+| `list_namespaces`, `get_namespace_stats`, `get_data_count` | Inventory and statistics. |
+| `recompute_stats` | Queue a full statistics rebuild. |
+| `drop_namespace` | Archive or permanently purge all documents in a namespace. |
+| `restore_archive`, `purge_archive` | Restore or permanently delete archived documents. |
+| `change_namespace`, `rename_namespace` | Move documents, or rename across live and archive data. |
+
+### Database lifecycle
+
+| Operation | Description |
+|---|---|
+| `create_db`, `db_exists`, `clone_db` | Create, check existence, copy. |
+| `create_backup`, `restore_backup`, `list_backups`, `tag_backup` | Compressed backups with a searchable catalog. |
+| `load_db`, `offload_db`, `sync_db`, `get_sync_status`, `verify_db` | S3 hydration and synchronization. |
+| `create_snapshot`, `list_snapshots`, `restore_snapshot`, `compact_wal` | Versioned snapshots and WAL maintenance. |
+| `vacuum_db`, `reap_db` | Compaction; immediate TTL, archive, and lifecycle processing. |
+
+### System
+
+| Operation | Description |
+|---|---|
+| `list_commands`, `list_dbs`, `list_all_dbs` | Instance inventory. Global; no `db` required. |
+| `system_get_inventory`, `system_refresh_inventory`, `system_get_db_status` | Cross-database system catalog. |
+| `system_snapshot_db_stats`, `system_query_db_stats`, `system_list_db_events` | Durable statistics and lifecycle history. |
+| `get_system_stats`, `system_memory`, `cleanup_temp_artifacts` | Runtime statistics, memory, temporary-file cleanup. |
+| `get_system_config`, `get_db_stats`, `snapshot_db_stats`, `query_db_stats` | Per-database configuration and counters. |
+
+Required inputs and full option tables: [Operation index](DOCUMENTATION.md#operation-index).
+
+## Configuration
+
+`kokoadb.env` is the canonical environment template. `KOKOADB_*` is the supported configuration prefix.
+
+```env
+KOKOADB_PORT=6543
+KOKOADB_BASE_PATH=/_/kdb
+KOKOADB_AUTH_MODE=access_key          # or `none` for trusted local development
+KOKOADB_ACCESS_KEY=a-long-random-secret
+
+KOKOADB_STORAGE_MODE=local            # or `s3`
+KOKOADB_DATA_DIR=/data
+
+KOKOADB_RUNTIME_PROFILE=balanced      # memory | balanced | throughput
+KOKOADB_WRITE_MODE=committed          # direct | committed | accepted
+KOKOADB_QUERY_DEFAULT_LIMIT=50
+KOKOADB_OPERATION_TIMEOUT_MS=30000
 ```
 
-Filter paths support `[]` when an array index is unknown. Separate wildcard paths are independent; use `$elemMatch` to require multiple conditions on the same element:
-
-```json
-{
-  "filter": {
-    "departments[].teams[].members[].name": "Ada"
-  }
-}
-```
-
-By default unknown Mutation Operators silently no-op. Set `KONGODB_STRICT_MUTATIONS_OPERATORS=true` to make them return an error instead.
-
----
-
-## Payload Field Reference
-
-The most commonly used fields across operations:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `id` / `ids` | string / string[] | Document selector(s) |
-| `data` | object/array | Main write payload |
-| `insert_data` / `update_data` | object | Upsert payloads |
-| `filter` | object | Filter expression composed from Filter Operators |
-| `sort` | object/string | Sort spec |
-| `limit` / `offset` / `page` / `per_page` | int | Pagination |
-| `fields` / `exclude_fields` | string[] | Projection |
-| `compute` | object | Aggregate/per-row derived values |
-| `array_filters` | object | Named Filter Operator objects for `$[name]` positional array updates |
-| `lookups` | object | Join map |
-| `scope` | string | `namespace` (default) or `all` |
-| `include_archive` / `archive_only` | bool | Read source control |
-| `cache` | bool/int | `false/0` bypass, `true/1` default TTL, `N` custom TTL, `-1` invalidate |
-| `dry_run` | bool | Simulate without writing |
-| `purge` | bool | Hard-delete flag |
-| `ttl_seconds` / `expiry_behavior` | int / `archive`\|`delete` | TTL config |
-| `unique_fields` / `on_conflict` | string[] / string | Insert-time soft uniqueness |
-| `commit` | bool | Per-request write ack override |
-| `include_namespace` | bool | Show `_namespace` in response (alias `include_name`) |
-| `include_metadata` | bool | Include hidden document `_metadata` in `query` or `search` responses; omitted by default |
-
-*(See the full field table in the appendix docs for identity, files, metrics, and audit-specific fields.)*
-
----
-
-## Configuration Reference
-
-KiDB ships with sensible defaults — you can run it with zero config beyond `KONGODB_ACCESS_KEY`. Everything below is optional tuning.
-
-A number of subsystems that used to be individually feature-gated are now **core, always-on features** with internally managed safety thresholds: SQL execution capability, FTS capability, metric events, auto-indexing, JSONB storage, the system catalog, safe hydration, temp-file cleanup, and background job workers. You no longer need to flip a switch for these — they just work.
-
-### Server & Auth
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_PORT` | `8080` | HTTP port |
-| `KONGODB_BASE_PATH` | `/_/kdb` | Prefix for every route — gateway, docs, and Admin UI all live under this |
-| `KONGODB_AUTH_MODE` | `access_key` | `access_key` requires credentials; `none` explicitly enables unauthenticated local access |
-| `KONGODB_ACCESS_KEY` | empty | Shared API key (`X-Access-Key` header) and Basic-auth password; required in `access_key` mode |
-| `KONGODB_CORS_ALLOWED_ORIGINS` | empty | Comma-separated origins, for standalone browser clients calling the API directly. The bundled Admin UI is same-origin and doesn't need this |
-| `KONGODB_MAX_REQUEST_BYTES` | `16777216` | Max accepted request body size |
-| `KONGODB_OPERATION_TIMEOUT_MS` | `30000` | Max execution time per operation |
-
-### Built-in Web Interfaces
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_ADMIN_UI_ENABLED` | `true` | Serve the Admin UI at `${KONGODB_BASE_PATH}/admin/` |
-| `KONGODB_DOCS_ENABLED` | `true` | Serve rendered docs at `${KONGODB_BASE_PATH}/doc` |
-| `KONGODB_DOCS_FILE` | `DOCUMENTATION.md` | Which markdown file `/doc` renders |
-
-### Storage
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_STORAGE_MODE` | `local` | `local` — durable local `.db` files, or `s3` — local working files plus S3-backed WAL/snapshots |
-| `KONGODB_DATA_DIR` | `./data` | Root directory for local database files |
-| `KONGODB_S3_BUCKET` | empty | Required when `KONGODB_STORAGE_MODE=s3` |
-| `KONGODB_S3_PREFIX` | `data/kongodb/data` | Object key prefix under the bucket |
-| `KONGODB_S3_REGION` | `us-east-1` | S3 region |
-| `KONGODB_S3_ENDPOINT` | empty | Custom S3-compatible endpoint (optional) |
-| `KONGODB_S3_ACCESS_KEY` / `KONGODB_S3_SECRET_KEY` | empty | S3 credentials |
-| `KONGODB_S3_SESSION_TOKEN` | empty | Optional STS session token |
-
-### Runtime Profile & Concurrency
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_RUNTIME_PROFILE` | `balanced` | `balanced` — standard defaults · `memory` — smaller caches/queues for constrained environments · `throughput` — larger batches/concurrency for high load |
-| `KONGODB_MAX_ACTIVE_DBS` | `100` | Optional override for the active/open-DB LRU cap under the chosen profile |
-| `KONGODB_WORKER_CONCURRENCY` | `4` | Shared concurrency budget across the reaper, backups, jobs, and remote-sync work |
-
-### S3 Replication & Snapshots
-
-*(Only relevant in `s3` storage mode.)*
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_S3_TOPOLOGY` | `single` | `single` disables cross-instance polling; `multi` enables remote manifest polling while retaining writer leases |
-| `KONGODB_REPLICATION_MODE` | `async` | `sync` waits for remote replication before acknowledging a write; `async` flushes in the background |
-| `KONGODB_PRELOAD_DBS` | empty | Comma-separated db paths to load at startup |
-| `KONGODB_SNAPSHOT_EVERY_WRITES` | `100` | Target snapshot cadence; recovery currently retains a safe checkpoint per replicated batch |
-| `KONGODB_SNAPSHOT_RETENTION_DAYS` | `14` | How long snapshots are kept |
-| `KONGODB_REMOTE_SYNC_INTERVAL_SECS` | `10` | `multi` topology manifest polling interval; ignored in `single`, and `0` disables polling |
-
-Snapshots are stored once as `snapshots/<snapshot_id>.db`. The manifest's `current_snapshot_key` selects the hydration source; KiDB does not upload a duplicate `snapshots/current.db` object.
-
-Idle TTL reaper checks do not publish snapshots. A reaper checkpoint is created only when lifecycle cleanup actually changes database data.
-
-### Read / Write / Query Behavior
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_CACHE_TTL_SECS` | `60` | Read cache TTL; `0` disables the read cache entirely |
-| `KONGODB_WRITE_MODE` | `committed` | `direct` bypasses the write coordinator · `committed` waits for the durable result · `accepted` queues and acknowledges immediately |
-| `KONGODB_QUERY_DEFAULT_LIMIT` | `50` | Default page size when `limit`/`offset` are omitted |
-| `KONGODB_QUERY_MULTI_MAX_QUERIES` | `20` | Maximum child queries in one `multi_query` request |
-| `KONGODB_QUERY_LOOKUP_MAX_DEPTH` | `3` | Default max nested lookup depth |
-| `KONGODB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED` | `false` | Allow a request to override the lookup depth cap |
-| `KONGODB_RESPONSE_INCLUDE_SYSTEM_TIMESTAMPS` | `true` | Include `_created_at`/`_modified_at` in responses by default |
-| `KONGODB_RESPONSE_INCLUDE_NAMESPACE` | `false` | Include `_namespace` in query item responses by default |
-| `KONGODB_STRICT_MUTATIONS_OPERATORS` | `false` | `true` makes unknown/invalid Mutation Operators (`$inc`, `$push`, etc.) return an error instead of silently no-op'ing |
-
-### Data Lifecycle
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_ARCHIVE_TTL_SECS` | empty | Empty = no automatic archive purge |
-| `KONGODB_DELETE_DEFAULT_TTL_SECS` | empty | Empty = no default delete TTL |
-| `KONGODB_SYSTEM_RETENTION_DAYS` | `14` | Retention for internal system catalog history |
-
-### Metric Events
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_METRIC_EVENTS_CACHE_TTL_SECS` | `30` | Cache TTL for `metrics_query` results only. Set to `0` to disable just that cache — the Metrics Stack itself is always available |
-| `KONGODB_METRIC_EVENTS_RETENTION_DAYS` | empty | Empty keeps raw metric events indefinitely |
-
-### Backup, Export & Jobs
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `KONGODB_BACKUP_PATH` | `./backups` | Local path or full `s3://bucket/prefix`, used by both manual and automatic backups |
-| `KONGODB_BACKUP_EVERY_SECS` | `0` | `0` disables automatic backups. A positive value enables change-aware backups with that value as max staleness |
-| `KONGODB_BACKUP_RETENTION_DAYS` | `30` | How long backups are retained |
-| `KONGODB_EXPORT_PATH` | `./exports` | Local path or full `s3://bucket/prefix` for generated JSONL exports |
-| `KONGODB_JOB_RETENTION_DAYS` | `30` | Shared retention for terminal import/export job history |
-
-*(Full variable list with inline comments lives in `kongo.env`.)*
-
----
-
-## Admin UI
-
-KiDB ships with a built-in Admin UI — a single-page app served directly by KiDB itself, no separate install needed.
-
-- **URL:** `http://<host>:8080/_/kdb/admin/` (path follows `KONGODB_BASE_PATH`)
-- **Toggle:** `KONGODB_ADMIN_UI_ENABLED=true` (default). Set to `false` for API-only deployments.
-- **Auth:** same access key as the API, entered as HTTP Basic — username `kongo`, password = `KONGODB_ACCESS_KEY`.
-- **What you can do from it:**
-  - Browse databases, namespaces, and documents
-  - Run and preview queries, filters, projections, and pagination against any namespace
-  - Use the FTSearch workspace to search live documents and manage FTS index lifecycle
-  - View the Audit Timeline and manually record audit events
-  - Inspect backups, snapshots, and background jobs
-  - Read the rendered docs (same content as `/doc`)
-
-Because it's served same-origin from KiDB, you don't need to configure `KONGODB_CORS_ALLOWED_ORIGINS` just to use it — that setting is only for external browser apps calling the gateway directly.
-
----
+Every setting: [Configuration reference](DOCUMENTATION.md#configuration).
 
 ## Deployment
 
-### Build Directly From GitHub (No Repo Checkout Needed)
-
-You don't need to clone the repo to build KiDB — Docker can build straight from the GitHub URL. Handy for spinning up a container on a remote host without pulling the source down first.
-
-```bash
-docker build -t kongo-stack:latest https://github.com/mardix/kongo.git#main
-```
-
-Then run it like any other image:
-
-```bash
-docker run -d \
-  --name kongo-stack \
-  -p 8080:8080 \
-  -e KONGODB_ACCESS_KEY=change-me \
-  -v kongo_data:/app/data \
-  kongo-stack:latest
-```
-
-### Build Directly From GitHub With Docker Compose
-
-Same idea, but as a Compose service — `build.context` points at the GitHub URL instead of a local path:
-
-```yaml
-# kongo.docker-compose.yaml
-
-services:
-  kongo:
-    build:
-      context: https://github.com/mardix/kongo.git#main
-    restart: unless-stopped
-    image: kongo:local
-    container_name: kongo
-    ports:
-      - "8080:8080"
-    env_file:
-      - ./kongodb.env
-    environment:
-      # Access key for API and Admin UI access. Change this to a secure value in production.
-      KONGODB_AUTH_MODE: access_key
-      KONGODB_ACCESS_KEY: ${KONGODB_ACCESS_KEY:-change-me}
-
-      # == Storage configuration
-      # DATA_DIR is the persistent volume mount point inside the container. It must be writable by the container.
-      KONGODB_DATA_DIR: /data
-
-      # Storage: local|s3 -- Local storage is the default and requires a persistent volume. S3 storage requires AWS credentials and an S3 bucket.
-      KONGODB_STORAGE_MODE: local
-
-      # S3 storage configuration (only needed if KONGODB_STORAGE_MODE=s3)
-      KONGODB_S3_BUCKET:
-      KONGODB_S3_ACCESS_KEY:
-      KONGODB_S3_SECRET_KEY:
-      KONGODB_S3_PREFIX: data/kongo/data
-      KONGODB_S3_REGION: us-east-1
-
-      # Runtime  behavior
-      # KONGODB_RUNTIME_PROFILE: memory|*balanced|throughput
-      KONGODB_RUNTIME_PROFILE: balanced
-
-      # Write behavio
-      # KONGODB_WRITE_MODE: committed|accepted
-      KONGODB_WRITE_MODE: committed
-
-      # BACKUP_PATH and EXPORT_PATH are used for manual and automatic backups. They can be local paths or S3 paths (s3://bucket/prefix). If using S3, ensure the bucket exists and the container has access to it.
-      KONGODB_BACKUP_PATH: /data/backups
-      KONGODB_EXPORT_PATH: /data/exports
-
-      # Only needed by separately hosted browser clients; the bundled UI is same-origin.
-      # KONGODB_CORS_ALLOWED_ORIGINS:* for any
-      KONGODB_CORS_ALLOWED_ORIGINS:
-    volumes:
-      - kongodb-data:/data
-
-volumes:
-  kongodb-data:
-```
-
-```bash
-docker compose -f kongo.docker-compose.yaml up -d
-```
-
-### Building From a Local Checkout
-
-If you do have the repo locally:
-
-```bash
-docker run -d \
-  --name kongo \
-  --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
-  --env-file ./kongo.env.prod \
-  -v kongo-data:/data \
-  kongo
-```
-
-Bind to `127.0.0.1` and put a reverse proxy (Caddy/Nginx/Traefik) in front for public HTTPS.
+| Target | Storage mode | Notes |
+|---|---|---|
+| Local or embedded | `local` | Files under `KOKOADB_DATA_DIR`. |
+| Docker or VM | `local` | Named volume or host mount at `/data`. Bind to `127.0.0.1` behind a TLS proxy. |
+| Cloud Run or serverless | `s3` | Container-local paths are instance cache only. |
 
 ```bash
 docker compose up --build -d
-curl http://localhost:8080/_/kdb/ping
 ```
 
-Compose loads `kongo.env`, mounts a named volume to `/data`, and serves the Admin UI at `/_/kdb/admin/`.
+Compose builds the local Dockerfile, serves the Admin UI, loads `kokoadb.env`, and mounts a named `kokoadb-data` volume at `/data`.
 
-### Cloud Run
+See [Deployment](DOCUMENTATION.md#deployment) for the production checklist and Cloud Run configuration.
 
-Use S3-mode for durability — local container paths are ephemeral cache only:
+## Scope and boundaries
 
-```env
-KONGODB_STORAGE_MODE=s3
-KONGODB_DATA_DIR=/tmp/kongo
-KONGODB_S3_BUCKET=...
-KONGODB_S3_PREFIX=data/kongo/data
-KONGODB_S3_REGION=...
-KONGODB_S3_ACCESS_KEY=...
-KONGODB_S3_SECRET_KEY=...
+Kokoadb deliberately stops short in four places.
+
+- **Authentication.** The Identity store holds users, providers, statuses, and token hashes. It never verifies a password, validates an OAuth token, issues a session, or enforces permissions. The application does that and calls Kokoadb to record the result.
+- **File bytes.** The File catalog tracks metadata about objects stored elsewhere. It never uploads, downloads, moves, or deletes actual files.
+- **Concurrent writers.** Per-database write coordinators serialize mutations, and writer leases apply in both S3 topologies. S3 mode provides durability, snapshots, and recovery rather than multi-master writes.
+- **Horizontal scale.** Kokoadb runs on one node and does not shard across machines.
+
+## Development
+
+```bash
+./scripts/run-local.sh          # Run local server
+./scripts/smoke.sh              # full smoke test
 ```
 
----
+## Documentation
 
-## Examples
-
-### Core CRUD
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "insert",
-  "namespace": "users",
-  "payload": {
-    "data": {
-      "name": "Ada"
-    }
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "update",
-  "namespace": "users",
-  "payload": {
-    "data": {
-      "_id": "u1",
-      "name": "Ada L"
-    }
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": "*",
-  "payload": {
-    "filter": { "_id": { "$in": ["u1", "u2"] } }
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": "users",
-  "payload": {
-    "filter": {
-      "age": {
-        "$gte": 18
-      }
-    },
-    "sort": "age desc",
-    "limit": 20
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "query",
-  "namespace": "users",
-  "payload": {
-    "search": "ada",
-    "limit": 10
-  }
-}
-```
-
-### Lifecycle
-
-Attach a durable conditional transition to a singular write. The condition is checked against current state when the transition becomes due:
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "insert",
-  "namespace": "invitations",
-  "payload": {
-    "data": {"email": "user@example.com", "status": "pending"},
-    "lifecycle": {
-      "name": "expire_invitation",
-      "after_seconds": 86400,
-      "when": {"accepted_at": {"$exists": false}},
-      "update": {"status": "expired", "expired_at": {"@now": true}}
-    }
-  }
-}
-```
-
-Manage transitions with `schedule_transition`, `cancel_transition`, `get_transition`, `list_transitions`, and `retry_transition`. Lifecycle supports one object or an array on singular `insert`, explicit-ID `update`, and `upsert` with `max_docs:1`. Full execution, status, TTL, and interaction rules are in `DOCUMENTATION.md`.
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "delete",
-  "payload": {
-    "id": "u1"
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "set_ttl",
-  "namespace": "users",
-  "payload": {
-    "ids": ["u1"],
-    "ttl_seconds": 600
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "restore_archive",
-  "payload": {
-    "txn_id": "tx123"
-  }
-}
-```
-
-### Database ops
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "create_db",
-  "payload": {}
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "create_backup",
-  "payload": {
-    "backup_tag": "nightly"
-  }
-}
-```
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "restore_backup",
-  "payload": {
-    "backup_tag": "nightly",
-    "latest": true
-  }
-}
-```
-
-### Shorthand alias
-
-```json
-{
-  "db": "test/db02.main",
-  "operation": "query::users",
-  "payload": {}
-}
-```
-
-```json
-{
-  "db": "test/db02.main",
-  "operation": "search::users",
-  "payload": {
-    "search": "ada"
-  }
-}
-```
-
----
+- [DOCUMENTATION.md](DOCUMENTATION.md) — complete reference
+- [Core concepts](DOCUMENTATION.md#core-concepts) — databases, namespaces, write acknowledgments, the archive
+- [Cookbook](DOCUMENTATION.md#cookbook) — copy/paste requests for every operation
 
 ## License
 
-Kongodb is licensed under the **MIT License**.
+Kokoadb is licensed under the **MIT License**.
 
-Copyright (c) 2026 Mardix. All rights reserved.
+Copyright (c) 2026 Singlebase. All rights reserved.

@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18080}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
-ARCHIVE_TTL="${KONGODB_ARCHIVE_TTL_SECS:-}"
+PORT="${KOKOADB_PORT:-18080}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/smoke.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
+ARCHIVE_TTL="${KOKOADB_ARCHIVE_TTL_SECS:-}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
@@ -77,7 +77,7 @@ wait_for_job_completed() {
   done
 }
 
-echo "[1/22] building kongodb"
+echo "[1/22] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -91,14 +91,14 @@ mkdir -p "$DATA_DIR"
 mkdir -p "$(dirname "$LOG_FILE")"
 
 echo "[3/22] starting server on :$PORT"
-export KONGODB_PORT="$PORT"
-export KONGODB_STORAGE_MODE="local"
-export KONGODB_DATA_DIR="$DATA_DIR"
-export KONGODB_AUTH_MODE="none"
-export KONGODB_BASE_PATH="$BASE_PATH"
-export KONGODB_MAX_ACTIVE_DBS="2"
+export KOKOADB_PORT="$PORT"
+export KOKOADB_STORAGE_MODE="local"
+export KOKOADB_DATA_DIR="$DATA_DIR"
+export KOKOADB_AUTH_MODE="none"
+export KOKOADB_BASE_PATH="$BASE_PATH"
+export KOKOADB_MAX_ACTIVE_DBS="2"
 if [[ -n "$ARCHIVE_TTL" ]]; then
-  export KONGODB_ARCHIVE_TTL_SECS="$ARCHIVE_TTL"
+  export KOKOADB_ARCHIVE_TTL_SECS="$ARCHIVE_TTL"
 fi
 
 "$BIN" >"$LOG_FILE" 2>&1 &

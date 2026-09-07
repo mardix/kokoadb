@@ -4,13 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-PORT="${KONGODB_PORT:-18083}"
-SMOKE_ROOT="${KONGODB_SMOKE_ROOT:-./.smoke/lookup}"
-DATA_DIR="${KONGODB_DATA_DIR:-${SMOKE_ROOT}/data}"
-LOG_FILE="${KONGODB_SMOKE_LOG:-${SMOKE_ROOT}/logs/lookup-edge.log}"
-BIN="${KONGODB_BIN:-./target/debug/kongo}"
+PORT="${KOKOADB_PORT:-18083}"
+SMOKE_ROOT="${KOKOADB_SMOKE_ROOT:-./.smoke/lookup}"
+DATA_DIR="${KOKOADB_DATA_DIR:-${SMOKE_ROOT}/data}"
+LOG_FILE="${KOKOADB_SMOKE_LOG:-${SMOKE_ROOT}/logs/lookup-edge.log}"
+BIN="${KOKOADB_BIN:-${KOKOADB_BIN:-./target/debug/kokoadb}}"
 BASE_URL="http://127.0.0.1:${PORT}"
-BASE_PATH_RAW="${KONGODB_BASE_PATH:-}"
+BASE_PATH_RAW="${KOKOADB_BASE_PATH:-}"
 BASE_PATH="/${BASE_PATH_RAW#/}"
 BASE_PATH="${BASE_PATH%/}"
 if [[ "$BASE_PATH" == "/" ]]; then BASE_PATH=""; fi
@@ -49,7 +49,7 @@ assert_not_contains() {
 need_cmd cargo
 need_cmd curl
 
-echo "[1/9] building kongodb"
+echo "[1/9] building kokoadb"
 cargo build >/dev/null
 
 if [[ ! -x "$BIN" ]]; then
@@ -60,13 +60,13 @@ fi
 echo "[2/9] starting lookup edge server"
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="none" \
-KONGODB_QUERY_LOOKUP_MAX_DEPTH="3" \
-KONGODB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED="false" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="none" \
+KOKOADB_QUERY_LOOKUP_MAX_DEPTH="3" \
+KOKOADB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED="false" \
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!
 cleanup() {
@@ -115,13 +115,13 @@ assert_contains "$DEPTH_FAIL" '"status":"error"' "depth override over cap should
 assert_contains "$DEPTH_FAIL" 'exceeds max depth' "depth cap message should be present"
 
 kill "$PID" >/dev/null 2>&1 || true
-KONGODB_PORT="$PORT" \
-KONGODB_STORAGE_MODE="local" \
-KONGODB_DATA_DIR="$DATA_DIR" \
-KONGODB_BASE_PATH="$BASE_PATH" \
-KONGODB_AUTH_MODE="none" \
-KONGODB_QUERY_LOOKUP_MAX_DEPTH="3" \
-KONGODB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED="true" \
+KOKOADB_PORT="$PORT" \
+KOKOADB_STORAGE_MODE="local" \
+KOKOADB_DATA_DIR="$DATA_DIR" \
+KOKOADB_BASE_PATH="$BASE_PATH" \
+KOKOADB_AUTH_MODE="none" \
+KOKOADB_QUERY_LOOKUP_MAX_DEPTH="3" \
+KOKOADB_QUERY_LOOKUP_UNCAPPED_OVERRIDE_ENABLED="true" \
 "$BIN" >"$LOG_FILE" 2>&1 &
 PID=$!
 for _ in $(seq 1 40); do

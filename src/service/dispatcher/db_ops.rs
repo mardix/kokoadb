@@ -40,6 +40,182 @@ async fn db_exists(state: &AppState, db_path: &str) -> AppResult<GatewayResponse
     }))))
 }
 
+async fn create_import_upload_url(
+    state: &AppState,
+    db_path: &str,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let filename = req
+        .payload
+        .filename
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("filename is required".to_string()))?;
+    let content_type = req
+        .payload
+        .content_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/x-ndjson");
+    if content_type.len() > 128 || content_type.chars().any(char::is_control) {
+        return Err(AppError::BadRequest(
+            "content_type must be at most 128 characters and contain no control characters"
+                .to_string(),
+        ));
+    }
+    let source_hash = req
+        .payload
+        .source_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if source_hash.is_some_and(|value| {
+        value.len() > 256 || !value.is_ascii() || value.chars().any(char::is_control)
+    }) {
+        return Err(AppError::BadRequest(
+            "source_hash must be at most 256 printable ASCII characters".to_string(),
+        ));
+    }
+    let expires_in = req.payload.expires_in.unwrap_or(900).clamp(60, 3600) as u64;
+    let result = state
+        .db_manager
+        .create_import_upload_url(
+            db_path,
+            filename,
+            content_type,
+            source_hash,
+            expires_in,
+        )
+        .await?;
+    Ok(GatewayResponse::ok(Some(
+        serde_json::to_value(result)
+            .map_err(|e| AppError::Internal(format!("upload URL response encode failed: {e}")))?,
+    )))
+}
+
+async fn create_download_url(
+    state: &AppState,
+    db_path: &str,
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let payload = req.payload;
+    let artifact_type = payload
+        .catalog_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::BadRequest("type is required".to_string()))?;
+    let expires_in = payload.expires_in.unwrap_or(300).clamp(60, 3600) as u64;
+
+    let (artifact_id, source_path) = match artifact_type {
+        "export" => {
+            let job_id = payload
+                .job_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::BadRequest("export download requires job_id".to_string())
+                })?;
+            let mut rows = conn
+                .query(
+                    "SELECT target_path, status FROM __kdb_jobs
+                     WHERE job_id = ? AND job_type = 'export_jsonl' LIMIT 1",
+                    libsql::params![job_id.to_string()],
+                )
+                .await
+                .map_err(|e| AppError::Internal(format!("export download lookup failed: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| AppError::Internal(format!("export download row failed: {e}")))?
+                .ok_or_else(|| AppError::NotFound(format!("export job not found: {job_id}")))?;
+            let path: String = row.get(0).map_err(|e| {
+                AppError::Internal(format!("export download path decode failed: {e}"))
+            })?;
+            let status: String = row.get(1).map_err(|e| {
+                AppError::Internal(format!("export download status decode failed: {e}"))
+            })?;
+            if status != "completed" {
+                return Err(AppError::Conflict(format!(
+                    "export job is not completed: {job_id} status={status}"
+                )));
+            }
+            (job_id.to_string(), path)
+        }
+        "backup" => {
+            let backup_id = payload
+                .backup_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::BadRequest("backup download requires backup_id".to_string())
+                })?;
+            let mut rows = conn
+                .query(
+                    "SELECT backup_db_path FROM __kdb_backup_catalog WHERE backup_id = ? LIMIT 1",
+                    libsql::params![backup_id.to_string()],
+                )
+                .await
+                .map_err(|e| AppError::Internal(format!("backup download lookup failed: {e}")))?;
+            let row = rows
+                .next()
+                .await
+                .map_err(|e| AppError::Internal(format!("backup download row failed: {e}")))?
+                .ok_or_else(|| AppError::NotFound(format!("backup not found: {backup_id}")))?;
+            let path: String = row.get(0).map_err(|e| {
+                AppError::Internal(format!("backup download path decode failed: {e}"))
+            })?;
+            (backup_id.to_string(), path)
+        }
+        "snapshot" => {
+            if payload.snapshot_id.is_some() && payload.latest.unwrap_or(false) {
+                return Err(AppError::BadRequest(
+                    "snapshot_id and latest=true cannot be combined".to_string(),
+                ));
+            }
+            state
+                .db_manager
+                .snapshot_source_path(
+                    db_path,
+                    payload.snapshot_id.as_deref(),
+                    payload.latest.unwrap_or(false),
+                )
+                .await?
+        }
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "type must be one of: export, backup, snapshot; got {other}"
+            )));
+        }
+    };
+
+    if !source_path.starts_with("s3://") {
+        return Err(AppError::BadRequest(format!(
+            "{artifact_type} artifact is not stored on s3"
+        )));
+    }
+    let signed = state
+        .db_manager
+        .create_artifact_download_url(&source_path, expires_in)
+        .await?;
+    Ok(GatewayResponse::ok(Some(json!({
+        "type": artifact_type,
+        "artifact_id": artifact_id,
+        "download_url": signed.download_url,
+        "source_path": signed.source_path,
+        "filename": signed.filename,
+        "content_type": signed.content_type,
+        "size_bytes": signed.size_bytes,
+        "expires_in": signed.expires_in,
+        "expires_at": signed.expires_at
+    }))))
+}
+
 async fn list_commands() -> AppResult<GatewayResponse> {
     let items = vec![
         "create_db",
@@ -78,9 +254,13 @@ async fn list_commands() -> AppResult<GatewayResponse> {
         "user_query",
         "user_get_details",
         "user_update",
+        "user_update_password",
         "user_update_status",
         "user_delete",
         "user_create_token",
+        "user_get_token",
+        "user_consume_token",
+        "user_revoke_token",
         "user_link_provider",
         "user_unlink_provider",
         "file_create",
@@ -129,6 +309,8 @@ async fn list_commands() -> AppResult<GatewayResponse> {
         "drop_fts_index",
         "enable_fts_index",
         "export_jsonl",
+        "create_import_upload_url",
+        "create_download_url",
         "import_jsonl",
         "get_job",
         "list_jobs",
