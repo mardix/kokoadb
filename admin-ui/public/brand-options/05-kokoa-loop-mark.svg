@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">KokoaDB Kokoa Loop mark</title>
+  <rect width="64" height="64" rx="14" fill="#0f172a"/>
+  <ellipse cx="25" cy="32" rx="13" ry="17" fill="none" stroke="#d6a77a" stroke-width="5"/>
+  <ellipse cx="39" cy="32" rx="13" ry="17" fill="none" stroke="#38bdf8" stroke-width="5"/>
+  <path d="M21 25c3 2 5 2 8 0M20 32c3 2 7 2 10 0M21 39c3 2 5 2 8 0" fill="none" stroke="#fff7ed" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="39" cy="32" r="3.5" fill="#f8fafc"/>
+</svg>

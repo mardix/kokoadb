@@ -81,7 +81,7 @@ export function SettingsPanel() {
       <PageHeader
         eyebrow="Connections"
         title="Settings"
-        description="Manage multiple Kokoadb connections. Each connection keeps its own endpoint, access key, selected DB, namespace, inventory cache, and request history."
+        description="Manage multiple KokoaDB connections. Each connection keeps its own endpoint, access key, selected DB, namespace, inventory cache, and request history."
         actions={<button onClick={openDocs} className="btn-secondary">Open /doc</button>}
       />
 
@@ -101,7 +101,7 @@ export function SettingsPanel() {
                 <button key={conn.id} type="button" onClick={() => selectConnection(conn.id)} className={`w-full rounded-md border px-3 py-3 text-left transition ${active ? 'border-primary bg-primary/10' : 'border-slate-200 bg-white hover:border-primary/40 hover:bg-primary/5'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="truncate text-sm font-semibold text-slate-950">{conn.settings.name || 'Connection'}</div>
-                    {active ? <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold text-white">Active</span> : null}
+                    {active ? <span className="rounded-full bg-primary-action px-2 py-0.5 text-[10px] font-semibold text-white">Active</span> : null}
                   </div>
                   <div className="mt-1 truncate font-mono text-xs text-slate-500">{connectionEndpoint(conn.settings)}</div>
                 </button>
@@ -115,7 +115,7 @@ export function SettingsPanel() {
             <div className="panel-header-row">
               <div>
                 <h3 className="text-sm font-semibold text-slate-950">New Connection</h3>
-                <p className="text-xs text-slate-500">Use the full Kokoadb endpoint path. Example: https://host/_/kdb</p>
+                <p className="text-xs text-slate-500">Use the full KokoaDB endpoint path. Example: https://host/_/kdb</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={pingNewConnection} className="btn-secondary">Ping</button>
@@ -124,7 +124,7 @@ export function SettingsPanel() {
             </div>
             <div className="grid gap-4 p-4 lg:grid-cols-2">
               <Field label="Connection Name" value={newConnection.name} onChange={(v) => updateNewConnection({ name: v })} placeholder="Local, Staging, Production" />
-              <Field label="Kokoadb Endpoint" value={newConnection.endpoint} onChange={(v) => updateNewConnection({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
+              <Field label="KokoaDB Endpoint" value={newConnection.endpoint} onChange={(v) => updateNewConnection({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
               <Field label="Default DB" value={newConnection.db} onChange={(v) => updateNewConnection({ db: v })} placeholder="projects/db01.main" />
               <Field label="Default Namespace" value={newConnection.namespace} onChange={(v) => updateNewConnection({ namespace: v })} placeholder="ie: posts" />
               <Field label="Access Key" type="password" value={newConnection.accessKey} onChange={(v) => updateNewConnection({ accessKey: v })} placeholder="optional" className="lg:col-span-2" />
@@ -153,7 +153,7 @@ export function SettingsPanel() {
             </div>
             <div className="grid gap-4 p-4 lg:grid-cols-2">
               <Field label="Connection Name" value={draft.name} onChange={(v) => updateDraft({ name: v })} placeholder="Local, Staging, Production" />
-              <Field label="Kokoadb Endpoint" value={draft.endpoint} onChange={(v) => updateDraft({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
+              <Field label="KokoaDB Endpoint" value={draft.endpoint} onChange={(v) => updateDraft({ endpoint: v })} placeholder="https://api.example.com/_/kdb" />
               <Field label="Default DB" value={draft.db} onChange={(v) => updateDraft({ db: v })} placeholder="projects/db01.main" />
               <Field label="Default Namespace" value={draft.namespace} onChange={(v) => updateDraft({ namespace: v })} placeholder="ie: posts" />
               <Field label="Access Key" type="password" value={draft.accessKey} onChange={(v) => updateDraft({ accessKey: v })} placeholder="X-Access-Key" className="lg:col-span-2" />

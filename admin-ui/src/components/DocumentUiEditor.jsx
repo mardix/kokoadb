@@ -434,8 +434,8 @@ function JsonPrimitiveInput({ node, path, locked, readOnly, onPatch }) {
   if (node.type === 'boolean') {
     return (
       <div className="flex h-9 items-center gap-1 rounded-lg border border-slate-300 bg-white p-1">
-        <button type="button" onClick={() => onPatch({ value: true })} disabled={locked} className={`btn-tab flex-1 ${node.value === true ? 'bg-primary text-white' : 'text-slate-500'}`}>True</button>
-        <button type="button" onClick={() => onPatch({ value: false })} disabled={locked} className={`btn-tab flex-1 ${node.value === false ? 'bg-primary text-white' : 'text-slate-500'}`}>False</button>
+        <button type="button" onClick={() => onPatch({ value: true })} disabled={locked} className={`btn-tab flex-1 ${node.value === true ? 'bg-primary-action text-white' : 'text-slate-500'}`}>True</button>
+        <button type="button" onClick={() => onPatch({ value: false })} disabled={locked} className={`btn-tab flex-1 ${node.value === false ? 'bg-primary-action text-white' : 'text-slate-500'}`}>False</button>
       </div>
     );
   }

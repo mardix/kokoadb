@@ -11,6 +11,7 @@ pub struct Manifest {
     pub writer_id: String,
     pub applied_seq: u64,
     pub current_snapshot_id: Option<String>,
+    #[serde(default, skip_serializing)]
     pub current_snapshot_key: Option<String>,
     pub snapshots: Vec<SnapshotMeta>,
     pub segments: Vec<ManifestSegment>,

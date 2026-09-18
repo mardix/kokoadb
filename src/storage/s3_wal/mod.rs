@@ -875,9 +875,11 @@ impl S3WalEngine {
                     "snapshot not found for db {db_path}: {resolved_id}"
                 ))
             })?;
+        let object_key =
+            preferred_manifest_object_key(&self.cfg.prefix, db_path, &snapshot.object_key)?;
         Ok((
             resolved_id,
-            format!("s3://{}/{}", self.cfg.bucket, snapshot.object_key),
+            format!("s3://{}/{object_key}", self.cfg.bucket),
         ))
     }
 
@@ -1624,18 +1626,20 @@ impl S3WalEngine {
                     "snapshot not found in manifest for db {db_path}: {selector}"
                 ))
             })?;
-        if let Some(bytes) = self.replicator.get_blob(&object_key).await? {
-            if let Some(parent) = local_file.parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    AppError::Internal(format!("failed to create local hydrate dir: {e}"))
+        for storage_key in manifest_object_key_candidates(&self.cfg.prefix, db_path, &object_key)? {
+            if let Some(bytes) = self.replicator.get_blob(&storage_key).await? {
+                if let Some(parent) = local_file.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                        AppError::Internal(format!("failed to create local hydrate dir: {e}"))
+                    })?;
+                }
+                tokio::fs::write(local_file, bytes).await.map_err(|e| {
+                    AppError::Internal(format!("failed writing hydrated remote db: {e}"))
                 })?;
+                self.loaded_snapshot_ids
+                    .insert(db_path.to_string(), resolved_snapshot_id);
+                return Ok(());
             }
-            tokio::fs::write(local_file, bytes).await.map_err(|e| {
-                AppError::Internal(format!("failed writing hydrated remote db: {e}"))
-            })?;
-            self.loaded_snapshot_ids
-                .insert(db_path.to_string(), resolved_snapshot_id);
-            return Ok(());
         }
         Err(AppError::NotFound(format!(
             "snapshot object missing for db {db_path}: {object_key}"
@@ -1647,7 +1651,8 @@ impl S3WalEngine {
             .sync_snapshot_to_replicator(conn, db_path, &self.replicator)
             .await?;
         for key in deleted_keys {
-            self.replicator.delete_blob(&key).await?;
+            let storage_key = preferred_manifest_object_key(&self.cfg.prefix, db_path, &key)?;
+            self.replicator.delete_blob(&storage_key).await?;
         }
         self.loaded_snapshot_ids
             .insert(db_path.to_string(), snapshot_meta.id.clone());
@@ -1684,9 +1689,10 @@ impl S3WalEngine {
             .map(|m| m.applied_seq)
             .unwrap_or(0);
         let snapshot_id = format!("{}-{:020}", unix_now_secs(), applied_seq);
-        let versioned_key = versioned_snapshot_key(&self.cfg.prefix, db_path, &snapshot_id);
+        let versioned_key = versioned_snapshot_key(&snapshot_id);
+        let storage_key = preferred_manifest_object_key(&self.cfg.prefix, db_path, &versioned_key)?;
         let checksum = sha256_hex(&bytes);
-        target.put_blob(&versioned_key, &bytes).await?;
+        target.put_blob(&storage_key, &bytes).await?;
         let snapshot_meta = SnapshotMeta {
             id: snapshot_id,
             tenant: db_path.to_string(),
@@ -1715,7 +1721,7 @@ impl S3WalEngine {
         let manifest_exists = manifest.is_some();
         let snapshot_exists = if let Some(manifest) = manifest.as_ref() {
             if let Some((_, key)) = resolve_manifest_snapshot(manifest, None) {
-                repl.blob_exists(&key).await?
+                manifest_blob_exists(repl, &self.cfg.prefix, db_path, &key).await?
             } else {
                 false
             }
@@ -1746,13 +1752,13 @@ impl S3WalEngine {
             });
         };
         let snapshot_exists = if let Some((_, key)) = resolve_manifest_snapshot(&manifest, None) {
-            repl.blob_exists(&key).await?
+            manifest_blob_exists(repl, &self.cfg.prefix, db_path, &key).await?
         } else {
             false
         };
         let mut missing_segment_keys = Vec::new();
         for seg in &manifest.segments {
-            if !repl.blob_exists(&seg.object_key).await? {
+            if !manifest_blob_exists(repl, &self.cfg.prefix, db_path, &seg.object_key).await? {
                 missing_segment_keys.push(seg.object_key.clone());
             }
         }
@@ -1855,8 +1861,61 @@ fn sql_quote_path(path: &std::path::Path) -> AppResult<String> {
     Ok(raw.replace('\'', "''"))
 }
 
-fn versioned_snapshot_key(prefix: &str, db_path: &str, snapshot_id: &str) -> String {
-    format!("{}/{}/snapshots/{}.db", prefix, db_path, snapshot_id)
+fn versioned_snapshot_key(snapshot_id: &str) -> String {
+    format!("snapshots/{snapshot_id}.db")
+}
+
+fn manifest_object_key_candidates(
+    prefix: &str,
+    db_path: &str,
+    object_key: &str,
+) -> AppResult<Vec<String>> {
+    if object_key.contains("..") || object_key.contains("\\") || object_key.contains("://") {
+        return Err(AppError::Internal(format!(
+            "invalid manifest object key: {object_key}"
+        )));
+    }
+    let relative = ["snapshots/", "wal/"]
+        .into_iter()
+        .find_map(|marker| object_key.rfind(marker).map(|index| &object_key[index..]))
+        .ok_or_else(|| AppError::Internal(format!("invalid manifest object key: {object_key}")))?;
+    let preferred = format!(
+        "{}/{}/{}",
+        prefix.trim_matches('/'),
+        db_path.trim_matches('/'),
+        relative
+    );
+    let legacy = object_key.trim_start_matches('/').to_string();
+    if legacy == preferred || object_key == relative {
+        Ok(vec![preferred])
+    } else {
+        Ok(vec![preferred, legacy])
+    }
+}
+
+fn preferred_manifest_object_key(
+    prefix: &str,
+    db_path: &str,
+    object_key: &str,
+) -> AppResult<String> {
+    manifest_object_key_candidates(prefix, db_path, object_key)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::Internal("manifest object key resolution failed".to_string()))
+}
+
+async fn manifest_blob_exists(
+    replicator: &Replicator,
+    prefix: &str,
+    db_path: &str,
+    object_key: &str,
+) -> AppResult<bool> {
+    for candidate in manifest_object_key_candidates(prefix, db_path, object_key)? {
+        if replicator.blob_exists(&candidate).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn resolve_manifest_snapshot(
@@ -2228,8 +2287,8 @@ async fn dump_db_to_temp_bytes(
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_content_type, import_upload_object_key, resolve_manifest_snapshot,
-        sanitize_import_filename,
+        artifact_content_type, import_upload_object_key, manifest_object_key_candidates,
+        resolve_manifest_snapshot, sanitize_import_filename,
     };
     use crate::storage::s3_wal::{manifest::Manifest, snapshot::SnapshotMeta};
 
@@ -2284,6 +2343,34 @@ mod tests {
         assert_eq!(
             resolve_manifest_snapshot(&manifest(), Some("missing")),
             None
+        );
+    }
+
+    #[test]
+    fn resolves_relative_manifest_key_under_current_db_path() {
+        let keys =
+            manifest_object_key_candidates("data/kokoa", "archive/app.main", "snapshots/snap-2.db")
+                .unwrap();
+        assert_eq!(
+            keys,
+            vec!["data/kokoa/archive/app.main/snapshots/snap-2.db"]
+        );
+    }
+
+    #[test]
+    fn rebases_legacy_manifest_key_after_db_move() {
+        let keys = manifest_object_key_candidates(
+            "data/kokoa",
+            "archive/app.main",
+            "data/kokoa/live/app.main/snapshots/snap-2.db",
+        )
+        .unwrap();
+        assert_eq!(
+            keys,
+            vec![
+                "data/kokoa/archive/app.main/snapshots/snap-2.db",
+                "data/kokoa/live/app.main/snapshots/snap-2.db",
+            ]
         );
     }
 

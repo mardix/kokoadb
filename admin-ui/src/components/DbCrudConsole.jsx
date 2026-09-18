@@ -1334,7 +1334,7 @@ function DatabaseContextBar({ connectionName, origin, db }) {
       <button
         type="button"
         onClick={() => { window.location.hash = `#crud/db/${encodeDbForHash(db)}/overview`; }}
-        className="inline-flex items-center gap-1.5 font-semibold text-sky-800 transition hover:text-primary"
+        className="inline-flex items-center gap-1.5 font-semibold text-accent transition hover:text-primary"
         aria-label="Open database overview"
       >
         <span className="hidden" aria-hidden="true">←</span>
@@ -1556,7 +1556,7 @@ function DbListSection({ title, description, tone, dbs, onOpen }) {
 
 function DbRow({ db, onOpen }) {
   return (
-    <button onClick={onOpen} className="grid w-full gap-3 border-b border-slate-200 bg-white px-4 py-3 text-left transition last:border-b-0 hover:bg-emerald-50 lg:grid-cols-[minmax(0,1fr)_120px_90px_90px_90px_120px] lg:items-center">
+    <button onClick={onOpen} className="grid w-full gap-3 border-b border-slate-200 bg-white px-4 py-3 text-left transition last:border-b-0 hover:bg-primary-soft lg:grid-cols-[minmax(0,1fr)_120px_90px_90px_90px_120px] lg:items-center">
       <div className="min-w-0">
         <div className="truncate font-mono text-sm font-semibold text-slate-950">{dbLabel(db)}</div>
       </div>
@@ -1787,7 +1787,7 @@ function DbOverviewPanel({ db, dbInfo, namespaces, stats, dataCount, onOpen, onR
                 {tool.value !== undefined ? <span className="font-mono text-xl font-bold leading-none tracking-tight text-slate-600 bg-slate-300 p-2 rounded-md">{tool.value}</span> : null}
               </div>
               <p className="mt-2 !font-thin text-slate-500">{tool.description}</p>
-              {tool.detail ? <div className="mt-4 text-xs font-mono font-light uppercase tracking-wide text-sky-800">{tool.detail}</div> : null}
+              {tool.detail ? <div className="mt-4 text-xs font-mono font-light uppercase tracking-wide text-primary">{tool.detail}</div> : null}
             </button>
           ))}
           <div className="min-h-40 rounded-md border border-dashed border-slate-400 bg-transparent p-5">
@@ -1805,7 +1805,7 @@ function DbOverviewPanel({ db, dbInfo, namespaces, stats, dataCount, onOpen, onR
 }
 
 function OverviewMetric({ label, value, muted = false, danger = false }) {
-  const valueTone = danger ? 'text-rose-700' : muted ? 'text-slate-400' : 'text-sky-800';
+  const valueTone = danger ? 'text-rose-700' : muted ? 'text-slate-400' : 'text-primary';
   const labelTone = danger ? 'text-rose-700' : 'text-slate-500';
   return (
     <div className="min-w-0">
@@ -2534,7 +2534,7 @@ function DatastoreQueryWizard({ namespace, namespaces, form, open, onToggle, onN
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_120px_120px]">
             <label className="block">
               <span className="field-label">Namespace</span>
-              <select value={namespace || ''} onChange={(event) => onNamespace(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
+              <select value={namespace || ''} onChange={(event) => onNamespace(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
                 {!namespace ? <option value="">Select a namespace</option> : null}
                 {namespaces.map(namespaceLabel).filter(Boolean).map((name) => <option key={name} value={name}>{name}</option>)}
               </select>
@@ -2568,7 +2568,7 @@ function DatastoreQueryWizard({ namespace, namespaces, form, open, onToggle, onN
                   <Field label="Field" value={draft.field} onChange={(value) => setDraft((prev) => ({ ...prev, field: value }))} placeholder="email, profile.age, tags[]" />
                   <label className="block">
                     <span className="field-label">Operator</span>
-                    <select value={draft.op} onChange={(event) => setDraft((prev) => ({ ...prev, op: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
+                    <select value={draft.op} onChange={(event) => setDraft((prev) => ({ ...prev, op: event.target.value }))} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
                       {filterOperators.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
                     </select>
                   </label>
@@ -2687,7 +2687,7 @@ function QueryConsole({
                 {showNamespace ? <Field label="Namespace" value={namespace} onChange={() => {}} placeholder="users" readOnly /> : null}
                 <label className="block">
                   <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Preset</span>
-                  <select value={operation} onChange={(e) => onOperation(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
+                  <select value={operation} onChange={(e) => onOperation(e.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
                     {operations.map((item) => <option key={item} value={item}>{item}</option>)}
                   </select>
                 </label>
@@ -2716,7 +2716,7 @@ function RequestHistory({ items, onUse, onClear }) {
       {items.length ? (
         <div className="flex gap-2 overflow-auto pb-1">
           {items.map((item) => (
-            <button key={item.id} onClick={() => onUse(item)} className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-emerald-400 hover:bg-emerald-50">
+            <button key={item.id} onClick={() => onUse(item)} className="min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-primary/50 hover:bg-primary-soft">
               <div className="truncate font-mono text-xs font-semibold text-slate-950">{item.operation}{item.namespace ? ` · ${item.namespace}` : ''}</div>
               <div className="mt-1 truncate text-[11px] text-slate-500">{formatTimestamp(item.at)}</div>
             </button>
@@ -3070,7 +3070,7 @@ function ContextPill({ label, value, mono = false, tone = 'default' }) {
 
 function SortHeader({ label, active, dir, onClick }) {
   return (
-    <button onClick={onClick} className="flex max-w-full items-center gap-1 text-left uppercase tracking-wide hover:text-emerald-700" title={`Sort by ${label}`}>
+    <button onClick={onClick} className="flex max-w-full items-center gap-1 text-left uppercase tracking-wide hover:text-primary" title={`Sort by ${label}`}>
       <span className="truncate">{label}</span>
       <span className={`text-[10px] ${active ? 'text-emerald-700' : 'text-slate-400'}`}>{active ? (String(dir).toLowerCase() === 'desc' ? 'DESC' : 'ASC') : '↕'}</span>
     </button>
@@ -3547,7 +3547,7 @@ function BatchActionModal({ modal, onChange, onClose, onSubmit }) {
               <Field label="TTL seconds" value={modal.ttlSeconds} onChange={(v) => onChange({ ttlSeconds: v })} placeholder="3600" />
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Expiry behavior</span>
-                <select value={modal.expiryBehavior} onChange={(e) => onChange({ expiryBehavior: e.target.value })} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20">
+                <select value={modal.expiryBehavior} onChange={(e) => onChange({ expiryBehavior: e.target.value })} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
                   <option value="archive">archive</option>
                   <option value="delete">delete</option>
                 </select>
@@ -3573,7 +3573,7 @@ function BatchActionModal({ modal, onChange, onClose, onSubmit }) {
 function CheckboxField({ label, checked, onChange }) {
   return (
     <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary" />
       {label}
     </label>
   );
@@ -3805,7 +3805,7 @@ function NamespaceTable({ namespaces, selected, onSelect, compact = false, empty
                   <td className="border-b border-slate-200 px-3 py-2">{formatBytes(item.live_bytes ?? item.size_bytes)}</td>
                   <td className="border-b border-slate-200 px-3 py-2">{item.__kdb_archive_count ?? item.archive_count ?? 0}</td>
                   <td className="border-b border-slate-200 px-3 py-2">{formatBytes(item.__kdb_archive_bytes ?? item.archive_bytes)}</td>
-                  <td className="border-b border-slate-200 px-3 py-2 text-right"><button onClick={() => onSelect(name)} className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold hover:border-emerald-500 hover:text-emerald-700">View</button></td>
+                  <td className="border-b border-slate-200 px-3 py-2 text-right"><button onClick={() => onSelect(name)} className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold hover:border-primary hover:text-primary">View</button></td>
                 </tr>
               );
             })}
@@ -5426,7 +5426,7 @@ function CreateSqlTableModal({ onClose, onSubmit }) {
 
 function CheckPill({ label, checked, onChange, locked = false }) {
   return (
-    <label className={`flex items-center justify-center rounded-md border px-2 py-1.5 text-[11px] font-semibold ${locked ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'} ${checked ? 'border-primary bg-primary text-white' : 'border-slate-300 bg-white text-slate-600'}`}>
+    <label className={`flex items-center justify-center rounded-md border px-2 py-1.5 text-[11px] font-semibold ${locked ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'} ${checked ? 'border-primary-action bg-primary-action text-white' : 'border-slate-300 bg-white text-slate-600'}`}>
       <input type="checkbox" checked={checked} disabled={locked} onChange={(event) => onChange(event.target.checked)} className="sr-only" />
       {label}
     </label>
@@ -5763,7 +5763,7 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
             {uploadProgress !== null ? (
               <div className="md:col-span-2" aria-live="polite">
                 <div className="mb-1 flex justify-between text-[11px] font-semibold text-slate-600"><span>Upload Progress</span><span>{uploadProgress}%</span></div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-primary transition-all" style={{ width: `${uploadProgress}%` }} /></div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-primary-action transition-all" style={{ width: `${uploadProgress}%` }} /></div>
               </div>
             ) : null}
             <div className="md:col-span-2 flex justify-end">

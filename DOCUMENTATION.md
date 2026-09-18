@@ -864,6 +864,7 @@ Find the operation by task; the reference follows in the same order.
 | [`audit_query`](#audit_query) | None | Search and filter the audit timeline. |
 | [`user_create`](#user_create) | None | Create Identity user metadata. |
 | [`user_get`](#user_get) | User selector | Fetch one user by id, email, username, or provider identity. |
+| [`user_get_credentials`](#user_get_credentials) | User selector | Fetch password-verification material for a trusted application backend. |
 | [`user_get_details`](#user_get_details) | User selector | Fetch a user with providers, login methods, recent events. |
 | [`user_query`](#user_query) | None | Search and paginate users. |
 | [`user_update`](#user_update) | `user_id` or `id` | Update profile and application metadata. |
@@ -4241,7 +4242,8 @@ Internal tables:
 - Status values are app-defined strings.
 - Soft-deleted users keep email and provider identity reserved.
 - `purge: true` hard-deletes the user, providers, tokens, and events.
-- `password_hash` is never returned by any read operation.
+- `password_hash` is excluded from all general identity reads. Only the explicit, uncached `user_get_credentials` operation returns it to an authenticated caller.
+- Treat `user_get_credentials` as a server-to-server operation. Do not expose the Kokoadb access key, submitted password, or returned hash to a browser or untrusted client.
 
 ### `user_create`
 
@@ -4293,6 +4295,42 @@ Provider lookup, after your app validates the OAuth response:
 ```json
 { "db": "app/main", "operation": "user_get", "payload": {"provider": "github", "provider_user_id": "827364"} }
 ```
+
+### `user_get_credentials`
+
+Fetches only the stored material a trusted application backend needs to verify a submitted password. This operation bypasses the read cache. General operations such as `user_get`, `user_query`, and `user_get_details` continue to omit `password_hash`.
+
+**Required:** one of `user_id`, `id`, `email`, `username` — or `provider` + `provider_user_id`.
+
+```json
+{
+  "db": "app/main",
+  "operation": "user_get_credentials",
+  "payload": {"email": "user@example.com"}
+}
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "item": {
+      "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
+      "password_hash": "$argon2id$v=19$...",
+      "password_algo": "argon2id",
+      "requires_password_change": false,
+      "status": "active",
+      "password_updated_at": "2026-09-18T14:25:00.000Z"
+    }
+  }
+}
+```
+
+If the user does not exist, `item` is `null`. A user created without password credentials has `null` for `password_hash` and `password_algo`.
+
+The application must use the verification function for `password_algo`; it must not hash the submitted password again and compare strings. For example, with Argon2, pass the submitted plaintext password and returned encoded hash to the Argon2 verifier. Check `status` and `requires_password_change` as part of the application's login policy. Never log or cache the submitted password or returned hash.
 
 ### `user_get_details`
 
@@ -4790,7 +4828,7 @@ These operations apply in `KOKOADB_STORAGE_MODE=s3`.
 | `verify_db` | `db` | — | Verify manifest, snapshot, and segment object presence. |
 | `compact_wal` | `db` | `retain_segments` (default `1000`) | Compact the manifest segment list. |
 
-In S3 mode, `manifest.current_snapshot_key` is authoritative. Snapshot bytes are uploaded once to `snapshots/<snapshot_id>.db`; hydration, verification, and restore resolve the object through the manifest. No duplicate `current.db` is written.
+In S3 mode, `manifest.current_snapshot_id` selects the active snapshot. Snapshot and WAL object references stored in the manifest are relative to the database directory, such as `snapshots/<snapshot_id>.db` and `wal/<epoch>/<sequence>.json`. This makes a complete database directory relocatable within the configured bucket and prefix. Hydration, verification, restore, and signed downloads resolve those references against the manifest's current location. Existing manifests containing full object keys remain readable and are normalized the next time they are written. No duplicate `current.db` is written.
 
 ### `vacuum_db` and `reap_db`
 

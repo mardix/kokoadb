@@ -552,6 +552,7 @@ fn is_write_operation(operation: &str) -> bool {
             | "metrics_catalog"
             | "audit_query"
             | "user_get"
+            | "user_get_credentials"
             | "user_query"
             | "user_get_details"
             | "user_get_token"

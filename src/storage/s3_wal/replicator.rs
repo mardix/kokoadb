@@ -122,10 +122,8 @@ impl Replicator {
 
         let start_seq = manifest.applied_seq + 1;
         let end_seq = start_seq + sql_records.len() as u64 - 1;
-        let object_key = format!(
-            "{}/{}/wal/{}/{:020}.json",
-            self.cfg.prefix, tenant, lease.epoch, start_seq
-        );
+        let object_key = format!("wal/{}/{:020}.json", lease.epoch, start_seq);
+        let storage_key = self.resolve_object_key(tenant, &object_key);
 
         let records = sql_records
             .into_iter()
@@ -151,7 +149,7 @@ impl Replicator {
 
         let raw_segment = serde_json::to_vec(&segment)
             .map_err(|e| AppError::Internal(format!("segment encode failed: {e}")))?;
-        let seg_etag = self.store.put(&object_key, &raw_segment).await?;
+        let seg_etag = self.store.put(&storage_key, &raw_segment).await?;
 
         let manifest_segment = ManifestSegment {
             seq: start_seq,
@@ -324,7 +322,17 @@ impl Replicator {
         expected_etag: Option<&str>,
     ) -> AppResult<()> {
         let key = self.manifest_key(tenant);
-        let raw = serde_json::to_vec(manifest)
+        let mut portable = manifest.clone();
+        portable.tenant = tenant.to_string();
+        portable.current_snapshot_key = None;
+        for snapshot in &mut portable.snapshots {
+            snapshot.tenant = tenant.to_string();
+            snapshot.object_key = relative_object_key(&snapshot.object_key);
+        }
+        for segment in &mut portable.segments {
+            segment.object_key = relative_object_key(&segment.object_key);
+        }
+        let raw = serde_json::to_vec(&portable)
             .map_err(|e| AppError::Internal(format!("manifest encode failed: {e}")))?;
 
         self.store.put_if_match(&key, &raw, expected_etag).await?;
@@ -353,6 +361,23 @@ impl Replicator {
     fn lease_key(&self, tenant: &str) -> String {
         format!("{}/{tenant}/{LEASE_FILE}", self.cfg.prefix)
     }
+
+    fn resolve_object_key(&self, tenant: &str, object_key: &str) -> String {
+        format!(
+            "{}/{tenant}/{}",
+            self.cfg.prefix,
+            relative_object_key(object_key)
+        )
+    }
+}
+
+fn relative_object_key(object_key: &str) -> String {
+    for marker in ["snapshots/", "wal/"] {
+        if let Some(index) = object_key.rfind(marker) {
+            return object_key[index..].to_string();
+        }
+    }
+    object_key.trim_start_matches('/').to_string()
 }
 
 fn unix_now_secs() -> u64 {

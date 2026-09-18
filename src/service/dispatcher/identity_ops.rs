@@ -137,6 +137,83 @@ async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
     Ok(GatewayResponse::ok(Some(json!({"item": item}))))
 }
 
+async fn user_get_credentials(
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let payload = req.payload;
+    let (sql, binds) = if clean_optional(payload.provider.clone()).is_some()
+        || clean_optional(payload.provider_user_id.clone()).is_some()
+    {
+        let provider = required_text(payload.provider, "provider")?;
+        let provider_user_id = required_text(payload.provider_user_id, "provider_user_id")?;
+        (
+            "SELECT u.id, u.password_hash, u.password_algo,
+                    u.requires_password_change, u.status, u.password_updated_at
+             FROM __kdb_identity_users u
+             JOIN __kdb_identity_providers p ON p.user_id = u.id
+             WHERE p.provider = ? AND p.provider_user_id = ?
+             LIMIT 1",
+            vec![
+                libsql::Value::Text(provider),
+                libsql::Value::Text(provider_user_id),
+            ],
+        )
+    } else if let Some(user_id) = clean_optional(payload.user_id).or(payload.id) {
+        (
+            "SELECT id, password_hash, password_algo,
+                    requires_password_change, status, password_updated_at
+             FROM __kdb_identity_users WHERE id = ? LIMIT 1",
+            vec![libsql::Value::Text(user_id)],
+        )
+    } else if let Some(email) = clean_optional(payload.email) {
+        (
+            "SELECT id, password_hash, password_algo,
+                    requires_password_change, status, password_updated_at
+             FROM __kdb_identity_users WHERE email = ? LIMIT 1",
+            vec![libsql::Value::Text(email)],
+        )
+    } else if let Some(username) = clean_optional(payload.username) {
+        (
+            "SELECT id, password_hash, password_algo,
+                    requires_password_change, status, password_updated_at
+             FROM __kdb_identity_users WHERE username = ? LIMIT 1",
+            vec![libsql::Value::Text(username)],
+        )
+    } else {
+        return Err(AppError::BadRequest(
+            "user_id, id, email, username, or provider+provider_user_id is required".to_string(),
+        ));
+    };
+
+    let mut rows = conn
+        .query(sql, binds)
+        .await
+        .map_err(|e| AppError::Internal(format!("user_get_credentials query failed: {e}")))?;
+    let item = if let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| AppError::Internal(format!("user_get_credentials row read failed: {e}")))?
+    {
+        let requires_password_change = row.get::<i64>(3).map_err(|e| {
+            AppError::Internal(format!(
+                "user_get_credentials requires_password_change decode failed: {e}"
+            ))
+        })? != 0;
+        Some(json!({
+            "user_id": row.get::<String>(0).map_err(|e| AppError::Internal(format!("user_get_credentials id decode failed: {e}")))?,
+            "password_hash": row.get::<Option<String>>(1).map_err(|e| AppError::Internal(format!("user_get_credentials password_hash decode failed: {e}")))?,
+            "password_algo": row.get::<Option<String>>(2).map_err(|e| AppError::Internal(format!("user_get_credentials password_algo decode failed: {e}")))?,
+            "requires_password_change": requires_password_change,
+            "status": row.get::<String>(4).map_err(|e| AppError::Internal(format!("user_get_credentials status decode failed: {e}")))?,
+            "password_updated_at": row.get::<Option<String>>(5).map_err(|e| AppError::Internal(format!("user_get_credentials password_updated_at decode failed: {e}")))?
+        }))
+    } else {
+        None
+    };
+    Ok(GatewayResponse::ok(Some(json!({"item": item}))))
+}
+
 async fn user_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
     let page = payload.page.unwrap_or(1).max(1);
@@ -1275,7 +1352,13 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod identity_id_tests {
-    use super::normalize_optional_id;
+    use super::{normalize_optional_id, user_get, user_get_credentials};
+    use crate::{
+        api::dto::{GatewayRequest, OperationPayload},
+        storage::schema::init_schema_with_retry,
+    };
+    use libsql::Builder;
+    use uuid::Uuid;
 
     #[test]
     fn identity_ids_accept_and_preserve_custom_values() {
@@ -1284,5 +1367,73 @@ mod identity_id_tests {
             Some("Legacy-User:ABC".to_string())
         );
         assert_eq!(normalize_optional_id(Some("   ".to_string())).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn credentials_are_explicit_and_absent_from_normal_user_reads() {
+        let path = std::env::temp_dir().join(format!(
+            "kokoadb_identity_credentials_{}.db",
+            Uuid::new_v4().simple()
+        ));
+        let db = Builder::new_local(&path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        init_schema_with_retry(&conn, false).await.unwrap();
+        conn.execute(
+            "INSERT INTO __kdb_identity_users
+             (id, email, status, password_hash, password_algo, requires_password_change, data)
+             VALUES (?, ?, 'active', ?, 'argon2id', 1, json('{}'))",
+            libsql::params![
+                "user-1",
+                "user@example.com",
+                "$argon2id$v=19$test"
+            ],
+        )
+        .await
+        .unwrap();
+
+        let mut payload = OperationPayload::default();
+        payload.email = Some("user@example.com".to_string());
+        let credentials = user_get_credentials(
+            &conn,
+            GatewayRequest {
+                db: None,
+                operation: "user_get_credentials".to_string(),
+                namespace: None,
+                payload: payload.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let item = credentials
+            .data
+            .as_ref()
+            .and_then(|data| data.get("item"))
+            .unwrap();
+        assert_eq!(item["user_id"], "user-1");
+        assert_eq!(item["password_hash"], "$argon2id$v=19$test");
+        assert_eq!(item["password_algo"], "argon2id");
+        assert_eq!(item["requires_password_change"], true);
+
+        let public_user = user_get(
+            &conn,
+            GatewayRequest {
+                db: None,
+                operation: "user_get".to_string(),
+                namespace: None,
+                payload,
+            },
+        )
+        .await
+        .unwrap();
+        let public_item = public_user
+            .data
+            .as_ref()
+            .and_then(|data| data.get("item"))
+            .unwrap();
+        assert!(public_item.get("password_hash").is_none());
+
+        drop(conn);
+        drop(db);
+        let _ = tokio::fs::remove_file(path).await;
     }
 }

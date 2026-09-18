@@ -641,7 +641,7 @@ function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error
           <div className="max-h-72 space-y-2 overflow-auto">
             {dimensions.length ? dimensions.map((dimension) => (
               <div key={dimension} className="rounded-lg border border-slate-200 bg-white p-2">
-                <button type="button" onClick={() => onAddGroup(dimension)} className="block w-full truncate text-left text-xs font-semibold text-slate-800 hover:text-emerald-700" title={`Add ${dimension} as group`}>
+                <button type="button" onClick={() => onAddGroup(dimension)} className="block w-full truncate text-left text-xs font-semibold text-slate-800 hover:text-primary" title={`Add ${dimension} as group`}>
                   {dimension}
                 </button>
                 <div className="mt-2 flex flex-wrap gap-1.5">

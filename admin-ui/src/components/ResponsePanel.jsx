@@ -48,7 +48,7 @@ export function ResponsePanel({ title = 'Response', data, metrics = false, durat
               <select
                 value={pageSize}
                 onChange={(e) => setPageSize(Number(e.target.value))}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20"
+                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
               >
                 {[10, 25, 50, 100, 250].map((option) => <option key={option} value={option}>{option}</option>)}
               </select>

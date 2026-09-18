@@ -39,8 +39,8 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
     return (
       <aside className="sidebar-shell sidebar-shell-collapsed items-center">
         <div className="sidebar-border flex w-full flex-col items-center border-b p-2.5">
-          <button type="button" onClick={onToggleCollapsed} className="flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/5 text-base font-medium text-emerald-300 transition hover:bg-white/10" title="Expand Sidebar" aria-label="Expand Sidebar">
-            <span aria-hidden="true">→</span>
+          <button type="button" onClick={onToggleCollapsed} className="flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/5 transition hover:bg-white/10" title="Expand Sidebar" aria-label="Expand Sidebar">
+            <img src="./brand/kokoadb-mark.svg" alt="" className="h-7 w-7 rounded-md" aria-hidden="true" />
           </button>
         </div>
         <nav className="flex flex-1 flex-col items-center gap-1.5 overflow-y-auto p-2.5">
@@ -72,8 +72,8 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
               ))}
             </div>
           ) : null}
-          <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-slate-400 hover:text-emerald-300" title="Open Kokoadb Docs">Docs</a>
-          <span className="font-mono text-[9px] text-slate-500" title={`Kokoadb ${formatVersion(serviceInfo?.version)}`}>{compactVersion(serviceInfo?.version)}</span>
+          <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-slate-400 hover:text-cocoa-light" title="Open KokoaDB Docs">Docs</a>
+          <span className="font-mono text-[9px] text-slate-500" title={`KokoaDB ${formatVersion(serviceInfo?.version)}`}>{compactVersion(serviceInfo?.version)}</span>
           <div className={`h-2.5 w-2.5 rounded-full ${statusDot(status.tone)}`} title={status.text} />
         </div>
       </aside>
@@ -82,13 +82,16 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
 
   return (
     <aside className="sidebar-shell">
-      <div className="sidebar-border border-b p-4">
-        <div className="flex items-start justify-between gap-3">
-          <button type="button" onClick={() => setPage('home')} className="text-left" aria-label="Open Kokoadb Home">
-            <div className="sidebar-brand text-2xl font-bold">Kokoadb</div>
-            <h1 className="mt-1.5 text-[11px] font-normal uppercase tracking-[0.16em] text-slate-400">Admin Console</h1>
+      <div className="sidebar-border border-b p-3">
+        <div className="flex items-start justify-between gap-2">
+          <button type="button" onClick={() => setPage('home')} className="flex min-w-0 items-center gap-2 text-left" aria-label="Open KokoaDB Home">
+            <img src="./brand/kokoadb-mark.svg" alt="" className="h-8 w-8 shrink-0 rounded-md" aria-hidden="true" />
+            <span className="min-w-0">
+              <span className="block truncate text-base font-bold tracking-tight text-white">Kokoa<span className="text-cocoa-light">DB</span></span>
+              <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-[0.14em] text-slate-400">Admin Console</span>
+            </span>
           </button>
-          <button type="button" onClick={onToggleCollapsed} className="rounded-md border border-white/10 px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/10 hover:text-white" title="Collapse Sidebar" aria-label="Collapse Sidebar">←</button>
+          <button type="button" onClick={onToggleCollapsed} className="rounded-md border border-white/10 px-1.5 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/10 hover:text-white" title="Collapse Sidebar" aria-label="Collapse Sidebar">←</button>
         </div>
 
         {stage === 'primary' ? (
@@ -107,7 +110,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
         {stage === 'primary' ? (
           <div className="space-y-2">
             <div className="sidebar-section">Start</div>
-            <SidebarItem title="Home" description="Welcome to Kokoa" active={page === 'home'} onClick={() => setPage('home')} />
+            <SidebarItem title="Home" description="Welcome to KokoaDB" active={page === 'home'} onClick={() => setPage('home')} />
             {page !== 'home' ? (
               <>
                 <div className="sidebar-section mt-5">Instance</div>
@@ -147,7 +150,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
           </div>
         ) : null}
         <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-md px-2 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-white/10 hover:text-white">
-          <span>Kokoadb Docs</span>
+          <span>KokoaDB Docs</span>
           <span aria-hidden="true">↗</span>
         </a>
         <div className="mt-2 flex items-center justify-between px-2 text-[11px]"><span className="text-slate-500">Version</span><span className="font-mono text-slate-300">{formatVersion(serviceInfo?.version)}</span></div>
@@ -173,7 +176,7 @@ function SidebarItem({ title, description, active = false, compact = false, onCl
 }
 
 function CompactButton({ label, text, active = false, onClick }) {
-  return <button type="button" onClick={onClick} className={`flex h-9 w-9 items-center justify-center rounded-md text-[11px] font-medium transition ${active ? 'bg-white text-slate-950' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`} title={label} aria-label={label}>{text}</button>;
+  return <button type="button" onClick={onClick} className={`flex h-9 w-9 items-center justify-center rounded-md text-[11px] font-medium transition ${active ? 'bg-primary-action text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`} title={label} aria-label={label}>{text}</button>;
 }
 
 function goBack(stage, folder = '') {

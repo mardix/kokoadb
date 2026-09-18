@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 88" role="img" aria-labelledby="title">
+  <title id="title">KokoaDB Cocoa Stack logo</title>
+  <g transform="translate(8 12)">
+    <rect width="64" height="64" rx="14" fill="#0f172a"/>
+    <path d="M32 8C21 12 15 21 16 34c1 12 7 20 16 23 9-3 15-11 16-23C49 21 43 12 32 8Z" fill="#a8542c"/>
+    <path d="M22 25c6 4 14 4 20 0M20 34c7 4 17 4 24 0M22 43c6 4 14 4 20 0" fill="none" stroke="#fff7ed" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="32" cy="14" r="2.5" fill="#38bdf8"/>
+  </g>
+  <text x="90" y="57" fill="#0f172a" font-family="'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="700" letter-spacing="-1.5">Kokoa<tspan fill="#a8542c">DB</tspan></text>
+</svg>

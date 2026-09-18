@@ -3,8 +3,15 @@
 @theme {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
-  --color-primary: var(--color-sky-900);
-  --color-secondary: var(--color-slate-950);
+  --color-primary: #7c3f22;
+  --color-primary-action: #a8542c;
+  --color-primary-deep: #65331d;
+  --color-primary-soft: #fff7ed;
+  --color-primary-selected: #f5dfd2;
+  --color-secondary: #0f172a;
+  --color-accent: #0c4a6e;
+  --color-accent-bright: #38bdf8;
+  --color-cocoa-light: #d6a77a;
   --color-neutral: var(--color-slate-800);
   --color-danger: var(--color-rose-700);
   --color-warning: var(--color-amber-300);
@@ -48,7 +55,7 @@
   }
 
   .btn-primary {
-    @apply rounded bg-primary px-2.5 py-1.5 text-[13px] font-semibold text-surface transition hover:bg-primary/90;
+    @apply rounded bg-primary-action px-2.5 py-1.5 text-[13px] font-semibold text-surface transition hover:bg-primary-deep;
   }
 
   .btn-secondary {
@@ -78,7 +85,7 @@
     @apply rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 outline-none hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50
   }
   .btn-panel-menu-primary {
-    @apply rounded border border-slate-300 bg-primary px-2.5 py-1.5 text-xs font-semibold text-surface outline-none hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50
+    @apply rounded border border-primary-action bg-primary-action px-2.5 py-1.5 text-xs font-semibold text-surface outline-none hover:border-primary-deep hover:bg-primary-deep disabled:cursor-not-allowed disabled:opacity-50
   }
   .sidebar-shell {
     @apply fixed inset-y-0 left-0 z-40 flex h-screen w-[190px] flex-col border-r border-slate-200 bg-slate-950 text-white lg:sticky lg:top-0 lg:h-screen;
@@ -97,7 +104,7 @@
   }
 
   .sidebar-brand {
-    @apply text-emerald-300;
+    @apply text-cocoa-light;
   }
 
   .sidebar-muted {
@@ -117,7 +124,7 @@
   }
 
   .sidebar-menu-active {
-    @apply bg-slate-800 text-slate-100 !font-bold;
+    @apply bg-primary/25 text-white !font-bold;
   }
 
   .sidebar-menu-idle {
@@ -137,7 +144,7 @@
   }
 
   .sidebar-input {
-    @apply mb-2 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-xs text-white outline-none placeholder:text-slate-500 focus:border-emerald-400;
+    @apply mb-2 w-full rounded-md border border-white/10 bg-slate-900 px-2 py-2 text-xs text-white outline-none placeholder:text-slate-500 focus:border-cocoa-light;
   }
 
   .btn-tab {
@@ -161,7 +168,7 @@
   }
 
   .btn-chip-secondary {
-    @apply border-primary bg-primary text-surface hover:border-primary hover:bg-primary hover:text-surface;
+    @apply border-primary-action bg-primary-action text-surface hover:border-primary-deep hover:bg-primary-deep hover:text-surface;
   }
 
   .btn-label {
@@ -181,7 +188,7 @@
   }
 
   .badge-info {
-    @apply bg-sky-50 text-sky-700;
+    @apply bg-primary-soft text-primary-deep;
   }
 
   .badge-warn {
@@ -538,7 +545,7 @@
   }
 
   .document-table-control-save {
-    @apply bg-primary text-white hover:bg-primary/90 hover:text-white;
+    @apply bg-primary-action text-white hover:bg-primary-deep hover:text-white;
   }
 
   .document-table-select {
@@ -578,11 +585,11 @@
   }
 
   .document-table-row {
-    @apply bg-white transition-colors even:bg-slate-50/60 hover:bg-sky-50;
+    @apply bg-white transition-colors even:bg-slate-50/60 hover:bg-primary-soft;
   }
 
   .document-table-row-selected {
-    @apply bg-sky-50 even:bg-sky-50 hover:bg-sky-100;
+    @apply bg-primary-soft even:bg-primary-soft hover:bg-primary-selected;
   }
 
   .document-table-cell {
@@ -614,15 +621,15 @@
   }
 
   .document-table-row:hover :is(.document-table-cell-number, .document-table-cell-check, .document-table-cell-id, .document-table-cell-actions) {
-    @apply bg-sky-50;
+    @apply bg-primary-soft;
   }
 
   .document-table-row-selected :is(.document-table-cell-number, .document-table-cell-check, .document-table-cell-id, .document-table-cell-actions) {
-    @apply bg-sky-50;
+    @apply bg-primary-soft;
   }
 
   .document-table-row-selected:hover :is(.document-table-cell-number, .document-table-cell-check, .document-table-cell-id, .document-table-cell-actions) {
-    @apply bg-sky-100;
+    @apply bg-primary-selected;
   }
 
   .document-table-view-button {

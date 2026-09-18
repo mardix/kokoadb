@@ -230,7 +230,7 @@ function QueueRow({ item }) {
         <div className="font-mono text-xs text-slate-500">{queued}/{capacity} queued</div>
       </div>
       <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-        <div className={`h-full rounded-full ${pct >= 80 ? 'bg-danger' : pct >= 50 ? 'bg-amber-400' : 'bg-primary'}`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full ${pct >= 80 ? 'bg-danger' : pct >= 50 ? 'bg-amber-400' : 'bg-primary-action'}`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );

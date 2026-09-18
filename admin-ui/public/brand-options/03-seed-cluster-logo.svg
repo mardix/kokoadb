@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 88" role="img" aria-labelledby="title">
+  <title id="title">KokoaDB Seed Cluster logo</title>
+  <g transform="translate(8 12)">
+    <rect width="64" height="64" rx="14" fill="#0c4a6e"/>
+    <path d="M32 17 18 27v18l14 8 14-8V27L32 17Z" fill="none" stroke="#e2e8f0" stroke-width="2.5" stroke-linejoin="round"/>
+    <ellipse cx="32" cy="28" rx="10" ry="4.5" fill="#d6a77a"/>
+    <path d="M22 28v13c0 2.5 4.5 4.5 10 4.5s10-2 10-4.5V28" fill="#a8542c"/>
+    <path d="M22 34c0 2.5 4.5 4.5 10 4.5s10-2 10-4.5M22 40c0 2.5 4.5 4.5 10 4.5s10-2 10-4.5" fill="none" stroke="#fff7ed" stroke-width="2"/>
+    <circle cx="32" cy="11" r="3" fill="#7dd3fc"/>
+  </g>
+  <text x="90" y="57" fill="#0f172a" font-family="'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="700" letter-spacing="-1.5">Kokoa<tspan fill="#0c4a6e">DB</tspan></text>
+</svg>

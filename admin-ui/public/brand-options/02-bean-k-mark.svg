@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">KokoaDB Bean K mark</title>
+  <rect width="64" height="64" rx="14" fill="#7c3f22"/>
+  <path d="M44 11c9 10 8 28-2 38-8 8-21 7-27-2-7-11-2-28 10-35 7-4 14-4 19-1Z" fill="#fff7ed"/>
+  <path d="M24 18v29M25 33h8M33 33l10-13M33 33l10 13" fill="none" stroke="#0f172a" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="45" cy="19" r="3" fill="#38bdf8"/>
+  <circle cx="45" cy="47" r="3" fill="#38bdf8"/>
+</svg>

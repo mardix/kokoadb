@@ -22,13 +22,14 @@ export function WelcomePage({ setPage }) {
       <section className="overflow-hidden rounded-md border border-slate-300 bg-white">
         <div className="grid lg:grid-cols-2">
           <div className="flex min-h-[390px] flex-col justify-center p-7 lg:p-10 xl:p-12">
-            <div className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Admin Console</div>
-            <h1 className="mt-5 text-5xl font-black tracking-tight text-slate-900">Kokoa <span className="font-thin">Admin</span></h1>
+            <div className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Hybrid Database Toolkit</div>
+            <img src="./brand/kokoadb-logo.svg" alt="KokoaDB" className="mt-5 h-auto w-full max-w-[320px]" />
+            <h1 className="mt-5 text-4xl font-bold tracking-tight text-slate-900">Admin Console</h1>
             <p className="mt-5 max-w-2xl text-lg font-medium leading-8 text-slate-700">
-              The admin interface for documents, identities, files, metrics, search, audit logs, and SQL — built into Kokoadb.
+              The admin interface for documents, identities, files, metrics, search, audit logs, and SQL, built into KokoaDB.
               </p>
             <p className="mt-6 max-w-2xl text-sm leading-6 text-slate-600">
-              Start by choosing a saved connection. Kokoa will verify the host, then show the databases available on that instance.
+              Start by choosing a saved connection. KokoaDB will verify the host, then show the databases available on that instance.
             </p>
             <div className="mt-8 flex flex-wrap gap-2">
               <button type="button" onClick={() => setPage('settings')} className="btn-primary">
@@ -41,7 +42,7 @@ export function WelcomePage({ setPage }) {
             <div className="w-full">
               <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-600">How It Works</div>
               <div className="mt-5">
-                <WelcomeStep number="01" title="Connect" description="Choose a Kokoadb host and verify access." />
+                <WelcomeStep number="01" title="Connect" description="Choose a KokoaDB host and verify access." />
                 <WelcomeStep number="02" title="Select a database" description="Browse the host inventory without opening every DB." />
                 <WelcomeStep number="03" title="Work" description="Open the database tools you need from one workspace." />
               </div>
@@ -104,7 +105,7 @@ export function WelcomePage({ setPage }) {
         ) : (
           <div className="grid gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
             <div>
-              <h3 className="text-lg font-semibold text-slate-950">Add your first Kokoadb connection</h3>
+              <h3 className="text-lg font-semibold text-slate-950">Add your first KokoaDB connection</h3>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">You will need the full endpoint, such as <span className="font-mono text-slate-700">http://localhost:6543/_/kdb</span>, plus an access key if the server requires one.</p>
             </div>
             <button type="button" onClick={() => setPage('settings')} className="btn-primary">Enter Connection Settings</button>
@@ -120,7 +121,7 @@ export function WelcomePage({ setPage }) {
           </div>
         </div>
         <div className="grid border-b border-slate-200 md:grid-cols-3">
-          <HomeTool title="Connections" description="Add, edit, test, and switch saved Kokoadb hosts." action="Manage Connections" onClick={() => setPage('settings')} />
+          <HomeTool title="Connections" description="Add, edit, test, and switch saved KokoaDB hosts." action="Manage Connections" onClick={() => setPage('settings')} />
           <HomeTool title="System Metrics" description="Inspect this instance's uptime, traffic, memory, and background queues." action="View Metrics" onClick={() => setPage('metrics')} />
           <HomeTool title="System Admin" description="Access instance tools, database inventory, and the system catalog." action="Open Admin" onClick={() => setPage('admin')} />
         </div>

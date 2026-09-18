@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 88" role="img" aria-labelledby="title">
+  <title id="title">KokoaDB Kokoa Loop logo</title>
+  <g transform="translate(8 12)">
+    <rect width="64" height="64" rx="14" fill="#0f172a"/>
+    <ellipse cx="25" cy="32" rx="13" ry="17" fill="none" stroke="#d6a77a" stroke-width="5"/>
+    <ellipse cx="39" cy="32" rx="13" ry="17" fill="none" stroke="#38bdf8" stroke-width="5"/>
+    <path d="M21 25c3 2 5 2 8 0M20 32c3 2 7 2 10 0M21 39c3 2 5 2 8 0" fill="none" stroke="#fff7ed" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="39" cy="32" r="3.5" fill="#f8fafc"/>
+  </g>
+  <text x="90" y="57" fill="#0f172a" font-family="'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif" font-size="38" font-weight="700" letter-spacing="-1.5">Kokoa<tspan fill="#075985">DB</tspan></text>
+</svg>
