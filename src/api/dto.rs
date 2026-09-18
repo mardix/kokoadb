@@ -163,6 +163,7 @@ pub struct OperationPayload {
     pub scope: Option<String>,
     pub include_archive: Option<bool>,
     pub archive_only: Option<bool>,
+    pub include_credentials: Option<bool>,
     pub explain: Option<bool>,
     pub force_db: Option<bool>,
     pub cache: Option<CacheHint>,

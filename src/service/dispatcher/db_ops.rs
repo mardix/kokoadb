@@ -251,7 +251,6 @@ async fn list_commands() -> AppResult<GatewayResponse> {
         "audit_query",
         "user_create",
         "user_get",
-        "user_get_credentials",
         "user_query",
         "user_get_details",
         "user_update",

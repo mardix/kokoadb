@@ -79,6 +79,7 @@ async fn user_create(
 
 async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
+    let include_credentials = payload.include_credentials.unwrap_or(false);
     if clean_optional(payload.provider.clone()).is_some()
         || clean_optional(payload.provider_user_id.clone()).is_some()
     {
@@ -97,7 +98,7 @@ async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
             )
             .await
             .map_err(|e| AppError::Internal(format!("user_get provider query failed: {e}")))?;
-        let item = if let Some(row) = rows
+        let mut item = if let Some(row) = rows
             .next()
             .await
             .map_err(|e| AppError::Internal(format!("user_get provider row read failed: {e}")))?
@@ -106,6 +107,9 @@ async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
         } else {
             None
         };
+        if include_credentials {
+            attach_identity_credentials(conn, &mut item).await?;
+        }
         return Ok(GatewayResponse::ok(Some(json!({"item": item}))));
     }
 
@@ -125,7 +129,7 @@ async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
         )
         .await
         .map_err(|e| AppError::Internal(format!("user_get query failed: {e}")))?;
-    let item = if let Some(row) = rows
+    let mut item = if let Some(row) = rows
         .next()
         .await
         .map_err(|e| AppError::Internal(format!("user_get row read failed: {e}")))?
@@ -134,84 +138,55 @@ async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
     } else {
         None
     };
+    if include_credentials {
+        attach_identity_credentials(conn, &mut item).await?;
+    }
     Ok(GatewayResponse::ok(Some(json!({"item": item}))))
 }
 
-async fn user_get_credentials(
+async fn attach_identity_credentials(
     conn: &libsql::Connection,
-    req: GatewayRequest,
-) -> AppResult<GatewayResponse> {
-    let payload = req.payload;
-    let (sql, binds) = if clean_optional(payload.provider.clone()).is_some()
-        || clean_optional(payload.provider_user_id.clone()).is_some()
-    {
-        let provider = required_text(payload.provider, "provider")?;
-        let provider_user_id = required_text(payload.provider_user_id, "provider_user_id")?;
-        (
-            "SELECT u.id, u.password_hash, u.password_algo,
-                    u.requires_password_change, u.status, u.password_updated_at
-             FROM __kdb_identity_users u
-             JOIN __kdb_identity_providers p ON p.user_id = u.id
-             WHERE p.provider = ? AND p.provider_user_id = ?
-             LIMIT 1",
-            vec![
-                libsql::Value::Text(provider),
-                libsql::Value::Text(provider_user_id),
-            ],
-        )
-    } else if let Some(user_id) = clean_optional(payload.user_id).or(payload.id) {
-        (
-            "SELECT id, password_hash, password_algo,
-                    requires_password_change, status, password_updated_at
-             FROM __kdb_identity_users WHERE id = ? LIMIT 1",
-            vec![libsql::Value::Text(user_id)],
-        )
-    } else if let Some(email) = clean_optional(payload.email) {
-        (
-            "SELECT id, password_hash, password_algo,
-                    requires_password_change, status, password_updated_at
-             FROM __kdb_identity_users WHERE email = ? LIMIT 1",
-            vec![libsql::Value::Text(email)],
-        )
-    } else if let Some(username) = clean_optional(payload.username) {
-        (
-            "SELECT id, password_hash, password_algo,
-                    requires_password_change, status, password_updated_at
-             FROM __kdb_identity_users WHERE username = ? LIMIT 1",
-            vec![libsql::Value::Text(username)],
-        )
-    } else {
-        return Err(AppError::BadRequest(
-            "user_id, id, email, username, or provider+provider_user_id is required".to_string(),
+    item: &mut Option<Value>,
+) -> AppResult<()> {
+    let Some(item) = item.as_mut() else {
+        return Ok(());
+    };
+    let Some(user_id) = item.get("id").and_then(Value::as_str) else {
+        return Err(AppError::Internal(
+            "user_get credential attachment missing user id".to_string(),
         ));
     };
-
     let mut rows = conn
-        .query(sql, binds)
+        .query(
+            "SELECT password_hash, password_algo
+             FROM __kdb_identity_users WHERE id = ? LIMIT 1",
+            libsql::params![user_id.to_string()],
+        )
         .await
-        .map_err(|e| AppError::Internal(format!("user_get_credentials query failed: {e}")))?;
-    let item = if let Some(row) = rows
+        .map_err(|e| AppError::Internal(format!("user_get credentials query failed: {e}")))?;
+    let row = rows
         .next()
         .await
-        .map_err(|e| AppError::Internal(format!("user_get_credentials row read failed: {e}")))?
-    {
-        let requires_password_change = row.get::<i64>(3).map_err(|e| {
-            AppError::Internal(format!(
-                "user_get_credentials requires_password_change decode failed: {e}"
-            ))
-        })? != 0;
-        Some(json!({
-            "user_id": row.get::<String>(0).map_err(|e| AppError::Internal(format!("user_get_credentials id decode failed: {e}")))?,
-            "password_hash": row.get::<Option<String>>(1).map_err(|e| AppError::Internal(format!("user_get_credentials password_hash decode failed: {e}")))?,
-            "password_algo": row.get::<Option<String>>(2).map_err(|e| AppError::Internal(format!("user_get_credentials password_algo decode failed: {e}")))?,
-            "requires_password_change": requires_password_change,
-            "status": row.get::<String>(4).map_err(|e| AppError::Internal(format!("user_get_credentials status decode failed: {e}")))?,
-            "password_updated_at": row.get::<Option<String>>(5).map_err(|e| AppError::Internal(format!("user_get_credentials password_updated_at decode failed: {e}")))?
-        }))
-    } else {
-        None
-    };
-    Ok(GatewayResponse::ok(Some(json!({"item": item}))))
+        .map_err(|e| AppError::Internal(format!("user_get credentials row read failed: {e}")))?
+        .ok_or_else(|| AppError::Internal("user_get credentials user disappeared".to_string()))?;
+    let password_hash = row.get::<Option<String>>(0).map_err(|e| {
+        AppError::Internal(format!("user_get password_hash decode failed: {e}"))
+    })?;
+    let password_algo = row.get::<Option<String>>(1).map_err(|e| {
+        AppError::Internal(format!("user_get password_algo decode failed: {e}"))
+    })?;
+    let object = item
+        .as_object_mut()
+        .ok_or_else(|| AppError::Internal("user_get item must be an object".to_string()))?;
+    object.insert(
+        "password_hash".to_string(),
+        password_hash.map(Value::String).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "password_algo".to_string(),
+        password_algo.map(Value::String).unwrap_or(Value::Null),
+    );
+    Ok(())
 }
 
 async fn user_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
@@ -1352,7 +1327,7 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod identity_id_tests {
-    use super::{normalize_optional_id, user_get, user_get_credentials};
+    use super::{normalize_optional_id, user_get};
     use crate::{
         api::dto::{GatewayRequest, OperationPayload},
         storage::schema::init_schema_with_retry,
@@ -1393,34 +1368,13 @@ mod identity_id_tests {
 
         let mut payload = OperationPayload::default();
         payload.email = Some("user@example.com".to_string());
-        let credentials = user_get_credentials(
-            &conn,
-            GatewayRequest {
-                db: None,
-                operation: "user_get_credentials".to_string(),
-                namespace: None,
-                payload: payload.clone(),
-            },
-        )
-        .await
-        .unwrap();
-        let item = credentials
-            .data
-            .as_ref()
-            .and_then(|data| data.get("item"))
-            .unwrap();
-        assert_eq!(item["user_id"], "user-1");
-        assert_eq!(item["password_hash"], "$argon2id$v=19$test");
-        assert_eq!(item["password_algo"], "argon2id");
-        assert_eq!(item["requires_password_change"], true);
-
         let public_user = user_get(
             &conn,
             GatewayRequest {
                 db: None,
                 operation: "user_get".to_string(),
                 namespace: None,
-                payload,
+                payload: payload.clone(),
             },
         )
         .await
@@ -1431,6 +1385,28 @@ mod identity_id_tests {
             .and_then(|data| data.get("item"))
             .unwrap();
         assert!(public_item.get("password_hash").is_none());
+
+        payload.include_credentials = Some(true);
+        let credential_user = user_get(
+            &conn,
+            GatewayRequest {
+                db: None,
+                operation: "user_get".to_string(),
+                namespace: None,
+                payload,
+            },
+        )
+        .await
+        .unwrap();
+        let item = credential_user
+            .data
+            .as_ref()
+            .and_then(|data| data.get("item"))
+            .unwrap();
+        assert_eq!(item["id"], "user-1");
+        assert_eq!(item["password_hash"], "$argon2id$v=19$test");
+        assert_eq!(item["password_algo"], "argon2id");
+        assert_eq!(item["requires_password_change"], true);
 
         drop(conn);
         drop(db);

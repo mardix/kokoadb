@@ -297,7 +297,6 @@ async fn dispatch_inner(
         "audit_query" => heap_future(audit_query(state, &conn, req)).await,
         "user_create" => heap_future(user_create(state, &conn, req)).await,
         "user_get" => heap_future(user_get(&conn, req)).await,
-        "user_get_credentials" => heap_future(user_get_credentials(&conn, req)).await,
         "user_query" => heap_future(user_query(&conn, req)).await,
         "user_get_details" => heap_future(user_get_details(&conn, req)).await,
         "user_update" => heap_future(user_update(state, &conn, req)).await,

@@ -786,6 +786,7 @@ Every reusable `payload` key. Operation sections remain authoritative where a fi
 | `first_name`, `last_name`, `profile_photo` | string | First-class profile columns. |
 | `provider` / `provider_user_id` | string | External provider name and stable external id. |
 | `password_hash` / `password_algo` | string | App-generated hash and algorithm label. Kokoadb never stores raw passwords. |
+| `include_credentials` | bool | `user_get` only. Default `false`; when true, adds `password_hash` and `password_algo` to the returned user item for backend verification. |
 | `requires_password_change` | bool | Account signal for the app. Defaults to `false` on create. |
 | `token_hash` / `token_id` | string | App-generated token hash; internal token selector. |
 | `kind` | string | Token kind, e.g. `password_reset`, `email_verify`, `api_key`. |
@@ -863,8 +864,7 @@ Find the operation by task; the reference follows in the same order.
 | [`audit_ingest`](#audit_ingest) | `events[]` | Append immutable audit events. |
 | [`audit_query`](#audit_query) | None | Search and filter the audit timeline. |
 | [`user_create`](#user_create) | None | Create Identity user metadata. |
-| [`user_get`](#user_get) | User selector | Fetch one user by id, email, username, or provider identity. |
-| [`user_get_credentials`](#user_get_credentials) | User selector | Fetch password-verification material for a trusted application backend. |
+| [`user_get`](#user_get) | User selector | Fetch one user by id, email, username, or provider identity; optionally include password-verification material. |
 | [`user_get_details`](#user_get_details) | User selector | Fetch a user with providers, login methods, recent events. |
 | [`user_query`](#user_query) | None | Search and paginate users. |
 | [`user_update`](#user_update) | `user_id` or `id` | Update profile and application metadata. |
@@ -4242,8 +4242,8 @@ Internal tables:
 - Status values are app-defined strings.
 - Soft-deleted users keep email and provider identity reserved.
 - `purge: true` hard-deletes the user, providers, tokens, and events.
-- `password_hash` is excluded from all general identity reads. Only the explicit, uncached `user_get_credentials` operation returns it to an authenticated caller.
-- Treat `user_get_credentials` as a server-to-server operation. Do not expose the Kokoadb access key, submitted password, or returned hash to a browser or untrusted client.
+- `password_hash` is excluded from all identity reads by default. Only `user_get` with `include_credentials: true` adds it to the returned user item.
+- Treat `include_credentials: true` as server-to-server behavior. Do not expose the Kokoadb access key, submitted password, or returned hash to a browser or untrusted client.
 
 ### `user_create`
 
@@ -4296,17 +4296,16 @@ Provider lookup, after your app validates the OAuth response:
 { "db": "app/main", "operation": "user_get", "payload": {"provider": "github", "provider_user_id": "827364"} }
 ```
 
-### `user_get_credentials`
-
-Fetches only the stored material a trusted application backend needs to verify a submitted password. This operation bypasses the read cache. General operations such as `user_get`, `user_query`, and `user_get_details` continue to omit `password_hash`.
-
-**Required:** one of `user_id`, `id`, `email`, `username` — or `provider` + `provider_user_id`.
+Set `include_credentials: true` when a trusted application backend needs the stored password hash for verification. The hash is added directly to the returned user item alongside `id`, `email`, `password_algo`, and the other user fields. `user_query` and `user_get_details` never include it. `user_get` does not use the query-response cache.
 
 ```json
 {
   "db": "app/main",
-  "operation": "user_get_credentials",
-  "payload": {"email": "user@example.com"}
+  "operation": "user_get",
+  "payload": {
+    "email": "user@example.com",
+    "include_credentials": true
+  }
 }
 ```
 
@@ -4317,18 +4316,19 @@ Response:
   "status": "success",
   "data": {
     "item": {
-      "user_id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
+      "id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001",
+      "email": "user@example.com",
+      "status": "active",
       "password_hash": "$argon2id$v=19$...",
       "password_algo": "argon2id",
       "requires_password_change": false,
-      "status": "active",
       "password_updated_at": "2026-09-18T14:25:00.000Z"
     }
   }
 }
 ```
 
-If the user does not exist, `item` is `null`. A user created without password credentials has `null` for `password_hash` and `password_algo`.
+If the user does not exist, `item` is `null`. A user created without password credentials has `null` for `password_hash` and `password_algo` when credentials are requested.
 
 The application must use the verification function for `password_algo`; it must not hash the submitted password again and compare strings. For example, with Argon2, pass the submitted plaintext password and returned encoded hash to the Argon2 verifier. Check `status` and `requires_password_change` as part of the application's login policy. Never log or cache the submitted password or returned hash.
 
