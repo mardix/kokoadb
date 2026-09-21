@@ -6361,17 +6361,15 @@ function normalizeDocumentForDisplay(row) {
 }
 
 function normalizeDocumentForEdit(row) {
-  const hasDataObject = row?.data && typeof row.data === 'object' && !Array.isArray(row.data);
-  const metadata = hasDataObject
-    ? Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'data' && key !== '_metadata' && key.startsWith('_')))
-    : {};
-  const source = hasDataObject ? { ...row.data, ...metadata } : row;
-  const out = { ...(source || {}) };
+  // Query and write responses already return the document as a flat object. A
+  // field named `data` belongs to the document and must never be unwrapped.
+  const out = { ...(row || {}) };
   const id = documentId(row);
   if (id && !out._id) out._id = id;
   delete out._namespace;
   delete out.namespace;
   delete out._user_id;
+  delete out._metadata;
   return out;
 }
 
