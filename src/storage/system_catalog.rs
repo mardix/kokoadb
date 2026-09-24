@@ -279,6 +279,53 @@ impl SystemCatalog {
         Ok(removed)
     }
 
+    pub async fn remove_db(&self, db: &str) -> AppResult<()> {
+        let conn = self.connection().await?;
+        let tx = conn.transaction().await.map_err(|e| {
+            AppError::Internal(format!("system catalog db removal begin failed: {e}"))
+        })?;
+        tx.execute("DELETE FROM __kdb_system_db_stats WHERE db = ?", [db])
+            .await
+            .map_err(|e| AppError::Internal(format!("system catalog stats removal failed: {e}")))?;
+        tx.execute("DELETE FROM __kdb_system_db_events WHERE db = ?", [db])
+            .await
+            .map_err(|e| {
+                AppError::Internal(format!("system catalog events removal failed: {e}"))
+            })?;
+        tx.execute("DELETE FROM __kdb_system_dbs WHERE db = ?", [db])
+            .await
+            .map_err(|e| AppError::Internal(format!("system catalog db removal failed: {e}")))?;
+        tx.commit().await.map_err(|e| {
+            AppError::Internal(format!("system catalog db removal commit failed: {e}"))
+        })?;
+        Ok(())
+    }
+
+    pub async fn purge_local_db(&self) -> AppResult<()> {
+        let mut guard = self.conn.lock().await;
+        if let Some(conn) = guard.take() {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(FULL);").await;
+            drop(conn);
+        }
+        for path in [
+            self.path.as_ref().clone(),
+            PathBuf::from(format!("{}-wal", self.path.display())),
+            PathBuf::from(format!("{}-shm", self.path.display())),
+        ] {
+            match tokio::fs::remove_file(&path).await {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::Internal(format!(
+                        "purge system catalog file {} failed: {error}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn insert_stats(&self, record: &SystemDbStatsRecord) -> AppResult<()> {
         let conn = self.connection().await?;
         conn.execute(
@@ -581,4 +628,38 @@ fn decode_err(e: libsql::Error) -> AppError {
 
 fn now_rfc3339() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn purging_catalog_removes_file_and_recreates_empty_catalog() {
+        let root = std::env::temp_dir().join(format!(
+            "kokoa_system_catalog_purge_{}",
+            Uuid::new_v4().simple()
+        ));
+        let catalog = SystemCatalog::new(&root);
+        catalog
+            .insert_event(&SystemDbEventRecord {
+                db: Some("tenant/app.main".to_string()),
+                event: "test.event".to_string(),
+                level: "info".to_string(),
+                message: None,
+                metadata: None,
+            })
+            .await
+            .unwrap();
+        assert!(tokio::fs::try_exists(catalog.path.as_ref()).await.unwrap());
+
+        catalog.purge_local_db().await.unwrap();
+        assert!(!tokio::fs::try_exists(catalog.path.as_ref()).await.unwrap());
+
+        let items = catalog.list_dbs(10, 0).await.unwrap();
+        assert!(items.is_empty());
+        assert!(tokio::fs::try_exists(catalog.path.as_ref()).await.unwrap());
+
+        tokio::fs::remove_dir_all(root).await.ok();
+    }
 }

@@ -578,6 +578,48 @@ impl AppState {
             .count()
     }
 
+    pub fn clear_db_runtime_state(&self, db_path: &str) {
+        self.write_queues.remove(db_path);
+        self.db_stats.remove(db_path);
+
+        let pending_prefix = format!("{db_path}\u{1f}");
+        let pending_keys = self
+            .pending_documents
+            .iter()
+            .filter(|entry| entry.key().starts_with(&pending_prefix))
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in pending_keys {
+            self.pending_documents.remove(&key);
+        }
+
+        let epoch_keys = self
+            .cache_epochs
+            .iter()
+            .filter(|entry| {
+                entry.key() == &format!("a|{db_path}")
+                    || entry.key() == &format!("b|{db_path}")
+                    || entry.key().starts_with(&format!("c|{db_path}|"))
+            })
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in epoch_keys {
+            self.cache_epochs.remove(&key);
+        }
+
+        let ttl_cache_prefix = format!("{db_path}|");
+        let ttl_cache_keys = self
+            .read_cache_ttl_overrides
+            .iter()
+            .filter(|entry| entry.key().starts_with(&ttl_cache_prefix))
+            .map(|entry| entry.key().clone())
+            .collect::<Vec<_>>();
+        for key in ttl_cache_keys {
+            self.read_cache_ttl_overrides.remove(&key);
+        }
+        self.read_cache.invalidate_all();
+    }
+
     fn get_or_create_write_sender(&self, db_path: &str) -> mpsc::Sender<QueuedWrite> {
         let (tx, mut rx) = mpsc::channel::<QueuedWrite>(self.write_queue_capacity.max(1));
         match self.write_queues.entry(db_path.to_string()) {

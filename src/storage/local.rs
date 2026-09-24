@@ -249,6 +249,37 @@ impl LocalEngine {
         ))
     }
 
+    pub async fn delete_db(&self, db_path: &str) -> AppResult<(bool, usize)> {
+        let (cache_key, file_path) = resolve_db_file(self.base_path.as_str(), db_path)?;
+        let exists = tokio::fs::try_exists(&file_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to check db path: {e}")))?;
+        if !exists {
+            return Err(AppError::NotFound(format!("db_path not found: {db_path}")));
+        }
+
+        if let Some((_key, conn)) = self.conns.remove(&cache_key) {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(FULL);").await;
+        }
+        self.last_accessed.remove(&cache_key);
+        self.init_locks.remove(&cache_key);
+        self.backup_last_runs.remove(&cache_key);
+        self.backup_last_mtime.remove(&cache_key);
+
+        remove_if_exists(&file_path).await?;
+        remove_if_exists(&std::path::PathBuf::from(format!(
+            "{}-wal",
+            file_path.display()
+        )))
+        .await?;
+        remove_if_exists(&std::path::PathBuf::from(format!(
+            "{}-shm",
+            file_path.display()
+        )))
+        .await?;
+        Ok((true, 0))
+    }
+
     pub async fn close_idle_dbs(&self, idle_secs: u64) -> AppResult<usize> {
         if idle_secs == 0 {
             return Ok(0);

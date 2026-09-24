@@ -848,6 +848,127 @@ mod write_coordinator_repro_tests {
             queried_file.get("id").and_then(Value::as_str),
             Some("9943b6fc1f8e44a182a2db32bb93efea")
         );
+
+        let file_delete_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "file_delete".to_string(),
+            namespace: None,
+            payload: OperationPayload {
+                id: Some("9943b6fc1f8e44a182a2db32bb93efea".to_string()),
+                purge: Some(false),
+                commit: Some(true),
+                ..Default::default()
+            },
+        };
+        crate::service::dispatcher::dispatch(&state, db_path, file_delete_request)
+            .await
+            .expect("file_delete soft delete must succeed");
+
+        let file_get_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "file_get".to_string(),
+            namespace: None,
+            payload: OperationPayload {
+                id: Some("9943b6fc1f8e44a182a2db32bb93efea".to_string()),
+                ..Default::default()
+            },
+        };
+        let file_get_response =
+            crate::service::dispatcher::dispatch(&state, db_path, file_get_request)
+                .await
+                .expect("file_get must hide soft-deleted files");
+        assert_eq!(
+            file_get_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("item")),
+            Some(&Value::Null)
+        );
+
+        let file_query_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "file_query".to_string(),
+            namespace: None,
+            payload: OperationPayload::default(),
+        };
+        let file_query_response =
+            crate::service::dispatcher::dispatch(&state, db_path, file_query_request)
+                .await
+                .expect("file_query must hide soft-deleted files");
+        assert_eq!(
+            file_query_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("total_items"))
+                .and_then(Value::as_i64),
+            Some(0)
+        );
+
+        let count_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "get_data_count".to_string(),
+            namespace: None,
+            payload: OperationPayload::default(),
+        };
+        let count_response = crate::service::dispatcher::dispatch(&state, db_path, count_request)
+            .await
+            .expect("get_data_count must exclude soft-deleted files");
+        let files = count_response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("files"))
+            .expect("files count block");
+        assert_eq!(files.get("total").and_then(Value::as_i64), Some(0));
+        assert_eq!(files.get("size_bytes").and_then(Value::as_i64), Some(0));
+
+        let file_purge_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "file_delete".to_string(),
+            namespace: None,
+            payload: OperationPayload {
+                id: Some("9943b6fc1f8e44a182a2db32bb93efea".to_string()),
+                purge: Some(true),
+                commit: Some(true),
+                ..Default::default()
+            },
+        };
+        let purge_response =
+            crate::service::dispatcher::dispatch(&state, db_path, file_purge_request)
+                .await
+                .expect("file_delete purge must remove a previously hidden row");
+        assert_eq!(
+            purge_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("deleted"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let delete_db_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "delete_db".to_string(),
+            namespace: None,
+            payload: OperationPayload {
+                commit: Some(true),
+                ..Default::default()
+            },
+        };
+        let delete_db_response =
+            crate::service::dispatcher::dispatch(&state, db_path, delete_db_request)
+                .await
+                .expect("delete_db must archive a backup before deleting the database");
+        let delete_data = delete_db_response.data.as_ref().expect("delete_db data");
+        let backup_path = delete_data
+            .get("backup_path")
+            .and_then(Value::as_str)
+            .expect("archive backup path");
+        assert!(backup_path.contains("-archive-"));
+        assert!(backup_path.ends_with(".db.zst"));
+        assert!(tokio::fs::try_exists(backup_path).await.unwrap());
+        assert!(!state.db_manager.db_exists(db_path).await.unwrap());
+
+        tokio::fs::remove_dir_all(root).await.ok();
     }
 }
 

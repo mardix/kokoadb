@@ -582,6 +582,57 @@ impl S3WalEngine {
         Ok(())
     }
 
+    pub async fn delete_db(&self, db_path: &str) -> AppResult<(bool, usize)> {
+        let (cache_key, file_path) = resolve_db_file(self.base_path.as_str(), db_path)?;
+        let local_exists = tokio::fs::try_exists(&file_path)
+            .await
+            .map_err(|e| AppError::Internal(format!("failed to check db path: {e}")))?;
+        let manifest = manifest_key(&self.cfg.prefix, &cache_key);
+        let remote_prefix = manifest.trim_end_matches("manifest.json").to_string();
+        let mut remote_keys = self.replicator.list_keys(&remote_prefix).await?;
+        if !local_exists && remote_keys.is_empty() {
+            return Err(AppError::NotFound(format!("db_path not found: {db_path}")));
+        }
+
+        if let Some((_key, conn)) = self.conns.remove(&cache_key) {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(FULL);").await;
+        }
+        self.last_accessed.remove(&cache_key);
+        self.init_locks.remove(&cache_key);
+        self.write_counters.remove(&cache_key);
+        self.backup_last_runs.remove(&cache_key);
+        self.loaded_snapshot_ids.remove(&cache_key);
+        self.wal_queue
+            .lock()
+            .await
+            .retain(|record| record.db_path != cache_key);
+
+        // Delete the manifest first so remote discovery cannot resurrect a partially deleted DB.
+        let mut remote_objects_deleted = 0usize;
+        if let Some(index) = remote_keys.iter().position(|key| key == &manifest) {
+            self.replicator.delete_blob(&manifest).await?;
+            remote_keys.remove(index);
+            remote_objects_deleted = 1;
+        }
+        for key in remote_keys {
+            self.replicator.delete_blob(&key).await?;
+            remote_objects_deleted = remote_objects_deleted.saturating_add(1);
+        }
+
+        remove_if_exists(&file_path).await?;
+        remove_if_exists(&std::path::PathBuf::from(format!(
+            "{}-wal",
+            file_path.display()
+        )))
+        .await?;
+        remove_if_exists(&std::path::PathBuf::from(format!(
+            "{}-shm",
+            file_path.display()
+        )))
+        .await?;
+        Ok((local_exists, remote_objects_deleted))
+    }
+
     pub async fn load_db(&self, db_path: &str) -> AppResult<bool> {
         let (cache_key, _) = resolve_db_file(self.base_path.as_str(), db_path)?;
         if self.conns.contains_key(&cache_key) {

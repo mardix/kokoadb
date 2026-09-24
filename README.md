@@ -2,7 +2,7 @@
 
 **Kokoadb** is a fast and lightweight data platform built in Rust on LibSQL/SQLite. It runs locally, in Docker, or with S3-backed storage, and it's exposed as a single RPC-style HTTP endpoint: JSON in, JSON out.
 
-One consistent JSON API, eight capabilities:
+One consistent JSON API, seven capabilities:
 
 | | |
 |---|---|
@@ -12,7 +12,6 @@ One consistent JSON API, eight capabilities:
 | **Files** | Metadata registry for objects stored elsewhere: ownership, location, hashes, expiry, deletion state. |
 | **Search** | Full-text search (FTS5) over live documents, with background indexing. |
 | **Metrics** | Event ingest with bucketed, grouped aggregation over rolling and calendar ranges. |
-| **Audit Logs** | Append-only activity records, queryable by actor, action, target, status, source, and time. |
 | **Admin** | Backups, snapshots, S3 sync, JSONL import/export, background jobs, and a built-in Admin UI. |
 
 📖 **[Full documentation](DOCUMENTATION.md)** · also served at `/_/kdb/doc` on any running instance.
@@ -166,17 +165,15 @@ Metadata registry for objects the application stores elsewhere.
 
 | Operation | Description |
 |---|---|
-| `file_create`, `file_get`, `file_query`, `file_update`, `file_delete` | File metadata records and search. |
+| `file_create`, `file_get`, `file_query`, `file_update`, `file_delete` | File metadata records and search. Soft-deleted records are excluded from gets, queries, and counts; purge removes metadata permanently. |
 
-### Metrics and audit
+### Metrics
 
 | Operation | Description |
 |---|---|
 | `metrics_ingest` | Append application metric events. |
 | `metrics_query` | Bucketed and grouped aggregation over rolling or calendar ranges. |
 | `metrics_catalog` | Discover registered event names and dimension paths. |
-| `audit_ingest` | Append immutable audit events. |
-| `audit_query` | Search the audit timeline by actor, action, target, status, source, and time. |
 
 ### SQL and search
 
@@ -202,6 +199,7 @@ Metadata registry for objects the application stores elsewhere.
 | Operation | Description |
 |---|---|
 | `create_db`, `db_exists`, `clone_db` | Create, check existence, copy. |
+| `delete_db` | Create an archive-tagged backup, then permanently remove the live local/S3 database. |
 | `create_backup`, `restore_backup`, `list_backups`, `tag_backup` | Compressed backups with a searchable catalog. |
 | `load_db`, `offload_db`, `sync_db`, `get_sync_status`, `verify_db` | S3 hydration and synchronization. |
 | `create_snapshot`, `list_snapshots`, `restore_snapshot`, `compact_wal` | Versioned snapshots and WAL maintenance. |
@@ -212,7 +210,7 @@ Metadata registry for objects the application stores elsewhere.
 | Operation | Description |
 |---|---|
 | `list_commands`, `list_dbs`, `list_all_dbs` | Instance inventory. Global; no `db` required. |
-| `system_get_inventory`, `system_refresh_inventory`, `system_get_db_status` | Cross-database system catalog. |
+| `system_get_inventory`, `system_refresh_inventory`, `purge_system_db`, `system_get_db_status` | Cross-database system catalog, including local catalog purge/rebuild. |
 | `system_snapshot_db_stats`, `system_query_db_stats`, `system_list_db_events` | Durable statistics and lifecycle history. |
 | `get_system_stats`, `system_memory`, `cleanup_temp_artifacts` | Runtime statistics, memory, temporary-file cleanup. |
 | `get_system_config`, `get_db_stats`, `snapshot_db_stats`, `query_db_stats` | Per-database configuration and counters. |

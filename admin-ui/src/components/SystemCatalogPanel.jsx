@@ -71,6 +71,21 @@ export function SystemCatalogPanel() {
     });
   }
 
+  async function purgeSystemCatalog() {
+    if (!window.confirm('Purge the local __kdb_system.db catalog and rebuild it from discoverable databases? Historical catalog stats and events will be deleted.')) return;
+    return runStatusCall(async () => {
+      const data = await timed({ operation: 'purge_system_db', payload: {} });
+      const items = extractArray(data, ['data.items', 'items']);
+      setInventory(items);
+      setSelectedDb((current) => items.some((item) => item.db === current) ? current : (items[0]?.db || ''));
+      setStatusResponse(null);
+      setStatsResponse(null);
+      setEventsResponse(null);
+      showToast(`System catalog rebuilt: ${items.length} DB${items.length === 1 ? '' : 's'}`);
+      return data;
+    });
+  }
+
   async function loadDbStatus(db = selectedDb) {
     if (!db) return showToast('Select a DB first', true);
     return runStatusCall(async () => {
@@ -124,7 +139,8 @@ export function SystemCatalogPanel() {
           <div className="flex flex-wrap items-center gap-2">
             <CatalogBadge enabled={catalogEnabled} />
             <button type="button" onClick={() => loadInventory()} className="btn-secondary">Load Inventory</button>
-            <button type="button" onClick={refreshInventory} className="btn-primary">Reset & Refresh Inventory</button>
+            <button type="button" onClick={refreshInventory} className="btn-primary">Refresh Inventory</button>
+            <button type="button" onClick={purgeSystemCatalog} className="btn-danger">Purge & Rebuild Catalog</button>
             <button type="button" onClick={() => snapshotStats('')} className="btn-secondary">Snapshot Active DBs</button>
           </div>
         </div>

@@ -225,6 +225,7 @@ async fn list_commands() -> AppResult<GatewayResponse> {
         "list_all_dbs",
         "system_get_inventory",
         "system_refresh_inventory",
+        "purge_system_db",
         "system_get_db_status",
         "system_snapshot_db_stats",
         "system_query_db_stats",
@@ -247,8 +248,6 @@ async fn list_commands() -> AppResult<GatewayResponse> {
         "metrics_ingest",
         "metrics_query",
         "metrics_catalog",
-        "audit_ingest",
-        "audit_query",
         "user_create",
         "user_get",
         "user_query",
@@ -296,6 +295,7 @@ async fn list_commands() -> AppResult<GatewayResponse> {
         "compact_wal",
         "clone_db",
         "create_backup",
+        "delete_db",
         "restore_backup",
         "list_backups",
         "tag_backup",
@@ -409,6 +409,36 @@ async fn system_refresh_inventory(state: &AppState) -> AppResult<GatewayResponse
         "catalog_enabled": true,
         "refreshed": records.len(),
         "removed": removed,
+        "items": records.into_iter().map(system_db_record_to_json).collect::<Vec<_>>()
+    }))))
+}
+
+async fn purge_system_db(
+    state: &AppState,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    reject_operation_payload_options(&req.payload, "purge_system_db")?;
+    let catalog = require_system_catalog(state)?;
+    catalog.purge_local_db().await?;
+
+    let records = collect_system_inventory_records(state).await?;
+    for record in &records {
+        catalog.upsert_db(record).await?;
+    }
+    catalog
+        .insert_event(&SystemDbEventRecord {
+            db: None,
+            event: "system.catalog_rebuilt".to_string(),
+            level: "info".to_string(),
+            message: Some(format!("rebuilt system catalog with {} dbs", records.len())),
+            metadata: Some(json!({"count": records.len()})),
+        })
+        .await?;
+
+    Ok(GatewayResponse::ok(Some(json!({
+        "purged": true,
+        "rebuilt": true,
+        "count": records.len(),
         "items": records.into_iter().map(system_db_record_to_json).collect::<Vec<_>>()
     }))))
 }
@@ -988,9 +1018,16 @@ async fn get_data_count(
         "get_data_count users",
     )
     .await?;
-    let (files_total, file_statuses) =
-        grouped_status_counts(conn, "__kdb_files", "get_data_count files").await?;
-    let files_size_bytes = exact_table_sum(conn, "__kdb_files", "size_bytes").await?;
+    let file_visibility = "deleted_at IS NULL AND lower(status) <> 'deleted'";
+    let (files_total, file_statuses) = grouped_status_counts_filtered(
+        conn,
+        "__kdb_files",
+        "get_data_count files",
+        Some(file_visibility),
+    )
+    .await?;
+    let files_size_bytes =
+        exact_table_sum_filtered(conn, "__kdb_files", "size_bytes", Some(file_visibility)).await?;
     let metric_events = exact_table_count(conn, "__kdb_metric_events").await?;
 
     let table_names = user_table_names(conn).await?;
@@ -1005,7 +1042,6 @@ async fn get_data_count(
     let users_active = user_statuses.get("active").copied().unwrap_or(0);
     let users_inactive = user_statuses.get("inactive").copied().unwrap_or(0);
     let files_active = file_statuses.get("active").copied().unwrap_or(0);
-    let files_deleted = file_statuses.get("deleted").copied().unwrap_or(0);
 
     Ok(GatewayResponse::ok(Some(json!({
         "documents": {
@@ -1025,7 +1061,6 @@ async fn get_data_count(
         "files": {
             "total": files_total,
             "active": files_active,
-            "deleted": files_deleted,
             "size_bytes": files_size_bytes,
             "statuses": file_statuses
         },
@@ -1059,11 +1094,24 @@ async fn grouped_status_counts(
     table: &str,
     context: &str,
 ) -> AppResult<(i64, BTreeMap<String, i64>)> {
+    grouped_status_counts_filtered(conn, table, context, None).await
+}
+
+async fn grouped_status_counts_filtered(
+    conn: &libsql::Connection,
+    table: &str,
+    context: &str,
+    where_clause: Option<&str>,
+) -> AppResult<(i64, BTreeMap<String, i64>)> {
+    let filter = where_clause
+        .map(|value| format!(" WHERE {value}"))
+        .unwrap_or_default();
     let mut rows = conn
         .query(
             &format!(
-                "SELECT status, COUNT(*) FROM {} GROUP BY status ORDER BY status",
-                quote_sql_ident(table)
+                "SELECT status, COUNT(*) FROM {}{} GROUP BY status ORDER BY status",
+                quote_sql_ident(table),
+                filter
             ),
             (),
         )
@@ -1105,17 +1153,22 @@ async fn exact_table_count(conn: &libsql::Connection, table: &str) -> AppResult<
         .map_err(|e| AppError::Internal(format!("count table {table} decode failed: {e}")))
 }
 
-async fn exact_table_sum(
+async fn exact_table_sum_filtered(
     conn: &libsql::Connection,
     table: &str,
     column: &str,
+    where_clause: Option<&str>,
 ) -> AppResult<i64> {
+    let filter = where_clause
+        .map(|value| format!(" WHERE {value}"))
+        .unwrap_or_default();
     let mut rows = conn
         .query(
             &format!(
-                "SELECT COALESCE(SUM({}), 0) FROM {}",
+                "SELECT COALESCE(SUM({}), 0) FROM {}{}",
                 quote_sql_ident(column),
-                quote_sql_ident(table)
+                quote_sql_ident(table),
+                filter
             ),
             (),
         )
@@ -2262,5 +2315,61 @@ async fn offload_db(state: &AppState, db_path: &str) -> AppResult<GatewayRespons
     Ok(GatewayResponse::ok(Some(json!({
         "offloaded": true,
         "db": db_path
+    }))))
+}
+
+async fn delete_db(
+    state: &AppState,
+    db_path: &str,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
+    let mut payload = req.payload;
+    payload.commit = None;
+    reject_operation_payload_options(&payload, "delete_db")?;
+    if !state.db_manager.db_exists(db_path).await? {
+        return Err(AppError::NotFound(format!("db_path not found: {db_path}")));
+    }
+
+    let archive_timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let backup_tag = format!("archive-{archive_timestamp}");
+    let backup_target = archive_backup_db_path(state, db_path, &backup_tag);
+    let snapshot = if state.storage_mode_is_s3 {
+        Some(state.db_manager.sync_db(db_path).await?)
+    } else {
+        None
+    };
+    let backup_path = state
+        .db_manager
+        .backup_db_with_result(db_path, &backup_target)
+        .await?;
+    let deleted = state.db_manager.delete_db(db_path).await?;
+
+    state.clear_db_runtime_state(db_path);
+    if let Some(catalog) = state.system_catalog.as_ref() {
+        catalog.remove_db(db_path).await?;
+        catalog
+            .insert_event(&SystemDbEventRecord {
+                db: Some(db_path.to_string()),
+                event: "db.deleted".to_string(),
+                level: "warning".to_string(),
+                message: Some("database archived and deleted".to_string()),
+                metadata: Some(json!({
+                    "backup_path": backup_path,
+                    "backup_tag": backup_tag,
+                    "archive_timestamp": archive_timestamp
+                })),
+            })
+            .await?;
+    }
+
+    Ok(GatewayResponse::ok(Some(json!({
+        "deleted": true,
+        "db": db_path,
+        "archive_timestamp": archive_timestamp,
+        "backup_tag": backup_tag,
+        "backup_path": backup_path,
+        "snapshot": snapshot,
+        "local_deleted": deleted.local_deleted,
+        "remote_objects_deleted": deleted.remote_objects_deleted
     }))))
 }

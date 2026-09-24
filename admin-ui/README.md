@@ -41,7 +41,7 @@ The UI is organized as a three-level database workspace:
 
 - The Kokoa home only shows `Home` and `Connections`; it does not open or query a database.
 - Selecting a saved connection verifies it with Ping, then opens that host's cached database inventory.
-- Selecting a database opens its overview with quick stats and links to `DocumentDB`, `Identity`, `Files`, `Metrics`, `FTSearch`, `Audit Logs`, and `SQLiteDB`.
+- Selecting a database opens its overview with quick stats and links to `Data`, `Identity`, `Files`, `Metrics`, `Search`, and `SQL`.
 - Database-scoped navigation also exposes raw `Query`, detailed `Stats`, and `Database Admin` tools.
 - Contextual back actions move from a database to its host inventory, then from the host back to Kokoa home.
 - Files uses a browse-first inventory with dedicated Add File, Update, and Query workspaces plus a focused file-detail modal.

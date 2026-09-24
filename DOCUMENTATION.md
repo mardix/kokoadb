@@ -2,17 +2,16 @@
 
 **Kokoadb** is a fast and lightweight data platform built in Rust on LibSQL/SQLite. It runs locally, in Docker, or with S3-backed storage, and it's exposed as a single RPC-style HTTP endpoint: JSON in, JSON out.
 
-One consistent JSON API, eight capabilities:
+One consistent JSON API, seven capabilities:
 
 | | |
 |---|---|
-| **DocumentDB** | Schemaless JSON in namespaces. Filters, joins, aggregation, projection, TTL, soft delete, and transactions. |
-| **SQLiteDB** | Parameterized SQL against your own tables in the same database, plus table and schema discovery. |
+| **Data** | Schemaless JSON in namespaces. Filters, joins, aggregation, projection, TTL, soft delete, and transactions. |
 | **Identity** | User records, provider links, statuses, and token hashes. Your app authenticates; Kokoadb stores the state. |
 | **Files** | Metadata registry for objects stored elsewhere: ownership, location, hashes, expiry, deletion state. |
 | **Search** | Full-text search (FTS5) over live documents, with background indexing. |
+| **SQL** | Parameterized SQL against your own tables in the same database, plus table and schema discovery. Uses SQLite |
 | **Metrics** | Event ingest with bucketed, grouped aggregation over rolling and calendar ranges. |
-| **Audit Logs** | Append-only activity records, queryable by actor, action, target, status, source, and time. |
 | **Admin** | Backups, snapshots, S3 sync, JSONL import/export, background jobs, and a built-in Admin UI. |
 
 ```bash
@@ -42,7 +41,7 @@ That single request creates the database, creates the namespace, and stores the 
 - [Payload property reference](#payload-property-reference)
 - [Operation index](#operation-index)
 
-**Document data**
+**Datastore**
 - [Document operations](#document-operations) — `insert`, `update`, `upsert`, `delete`, `count`, `query`, `multi_query`, `aggregate`, `set_ttl`, `transaction`
 - [Filter operators](#filter-operators)
 - [Sorting](#sorting)
@@ -54,6 +53,20 @@ That single request creates the database, creates the namespace, and stores the 
 - [Positional array updates](#positional-array-updates)
 - [Document lifecycle transitions](#document-lifecycle-transitions)
 
+**Product stores**
+- [Identity store](#identity-store)
+- [File catalog](#file-catalog)
+- [Metrics events](#metrics-events)
+- [Search & Indexes](#full-text-search)
+- [SQL operations](#sql-operations)
+
+**Operations and administration**
+- [Namespace lifecycle](#namespace-lifecycle)
+- [Database operations](#database-operations)
+
+- [System and monitoring](#system-and-monitoring)
+
+
 **Import, export, jobs**
 - [`import_jsonl`](#import_jsonl)
 - [Browser upload to S3](#browser-upload-to-s3)
@@ -61,18 +74,6 @@ That single request creates the database, creates the namespace, and stores the 
 - [Presigned downloads](#presigned-downloads)
 - [Job control](#job-control)
 
-**Product stores**
-- [Metrics events](#metrics-events)
-- [Audit logs](#audit-logs)
-- [Identity store](#identity-store)
-- [File catalog](#file-catalog)
-
-**Operations and administration**
-- [Namespace lifecycle](#namespace-lifecycle)
-- [Database operations](#database-operations)
-- [SQL operations](#sql-operations)
-- [Indexes and full-text search](#indexes-and-full-text-search)
-- [System and monitoring](#system-and-monitoring)
 
 **Running it**
 - [Configuration](#configuration)
@@ -368,7 +369,7 @@ Long work never blocks the gateway. `import_jsonl`, `export_jsonl`, `create_back
 
 Kokoadb owns two prefixes inside every database:
 
-- `__kdb_*` — internal tables (`__kdb_archive`, `__kdb_jobs`, `__kdb_identity_users`, `__kdb_files`, `__kdb_audit_logs`, `__kdb_metrics_catalog`, …)
+- `__kdb_*` — internal tables (`__kdb_archive`, `__kdb_jobs`, `__kdb_identity_users`, `__kdb_files`, `__kdb_metrics_catalog`, …)
 - `sqlite_*` — SQLite internals
 
 `sql_execute` rejects any statement naming a table or index with these prefixes, and `sql_list_tables` hides them. You get direct SQL without being able to corrupt platform state.
@@ -497,7 +498,7 @@ Hidden by default. It appears when:
 - All Kokoadb system timestamps are UTC.
 - Accepted input format for system timestamp fields is RFC3339/ISO-8601 with timezone: `2025-12-24T23:39:26Z`, `2025-12-24T23:39:26.873397+00:00`.
 - Where `_created_at` is allowed as input and `_modified_at` is omitted, `_modified_at` is set to `_created_at`.
-- Some query-side date fields (`start`, `end` in metrics and audit) also accept plain `YYYY-MM-DD`.
+- Metrics query date fields (`start` and `end`) also accept plain `YYYY-MM-DD`.
 
 ### Success response
 
@@ -753,6 +754,8 @@ Every reusable `payload` key. Operation sections remain authoritative where a fi
 | `params` | array | Positional bind parameters for `sql_execute`. |
 | `table` | string | Table name for `sql_get_table_schema`. |
 
+`delete_db` and `purge_system_db` accept no payload options. Database deletion always creates its own archive-tagged backup target.
+
 ### Metrics
 
 | Field | Type | Description |
@@ -765,18 +768,6 @@ Every reusable `payload` key. Operation sections remain authoritative where a fi
 | `interval` | string | Bucket: `minute`, `hour`, `day`, `week`, `month`, `year`. |
 | `label` | string | Result label; supports templates like `{{start YYYY-MM-DD}}`. |
 | `bucket_label` | string | Item bucket label template, e.g. `{{bucket HH:mm}}`. |
-
-### Audit
-
-| Field | Type | Description |
-|---|---|---|
-| `action` | string | Audit action, e.g. `user.login`. |
-| `actor_type` / `actor_id` | string | Actor category (`user`, `service`, `admin`) and identifier. |
-| `target_type` / `target_id` | string | Target category (`document`, `file`, `user`) and identifier. |
-| `source` | string | Event source, e.g. `api`, `admin-ui`, `worker`. |
-| `request_id` | string | Correlation identifier. |
-| `ip_address` | string | Source IP supplied by the application. |
-| `message` | string | Human-readable context. |
 
 ### Identity
 
@@ -861,8 +852,6 @@ Find the operation by task; the reference follows in the same order.
 | [`metrics_ingest`](#metrics_ingest) | `events[]` | Append application metric events. |
 | [`metrics_query`](#metrics_query) | Event selector, range, `metrics[]` | Produce bucketed and grouped result sets. |
 | [`metrics_catalog`](#metrics_catalog) | None | Discover registered event names and dimension paths. |
-| [`audit_ingest`](#audit_ingest) | `events[]` | Append immutable audit events. |
-| [`audit_query`](#audit_query) | None | Search and filter the audit timeline. |
 | [`user_create`](#user_create) | None | Create Identity user metadata. |
 | [`user_get`](#user_get) | User selector | Fetch one user by id, email, username, or provider identity; optionally include password-verification material. |
 | [`user_get_details`](#user_get_details) | User selector | Fetch a user with providers, login methods, recent events. |
@@ -913,6 +902,7 @@ Find the operation by task; the reference follows in the same order.
 | [`verify_db`](#s3-replication-and-snapshots) | `db` | Verify referenced manifest, snapshot, and segment objects. |
 | [`compact_wal`](#s3-replication-and-snapshots) | `db` | Compact retained WAL segment metadata. |
 | [`clone_db`](#clone_db) | `db`, `to_db_path` | Copy the current database to a new path. |
+| [`delete_db`](#delete_db) | `db` | Snapshot and archive-backup a database, then permanently remove its live local/S3 artifacts. |
 | [`create_backup`](#backups) | `db` | Queue a compressed backup. |
 | [`restore_backup`](#backups) | One backup selector | Restore from path, id, tag, timestamp, or latest. |
 | [`list_backups`](#backups) | `db` | Browse the backup catalog. |
@@ -948,6 +938,7 @@ Find the operation by task; the reference follows in the same order.
 | [`list_all_dbs`](#instance-inventory) | None | Discover all known local and remote databases. |
 | [`system_get_inventory`](#system-catalog) | None | Read cross-database inventory from `__kdb_system.db`. |
 | [`system_refresh_inventory`](#system-catalog) | None | Refresh inventory from local/S3 discovery. |
+| [`purge_system_db`](#system-catalog) | None | Delete and immediately rebuild the local system catalog. |
 | [`system_get_db_status`](#system-catalog) | `db` | Combine live status with the system-catalog record. |
 | [`system_snapshot_db_stats`](#system-catalog) | Optional `db` | Snapshot active-database statistics into the catalog. |
 | [`system_query_db_stats`](#system-catalog) | None | Query system-catalog database history. |
@@ -962,11 +953,11 @@ Find the operation by task; the reference follows in the same order.
 
 ---
 
-## Document operations
+## Data 
 
 These are the primary API for storing and retrieving JSON. They all operate on the database named by top-level `db`. Unless an operation explicitly supports global scope, it also operates on one concrete `namespace`.
 
-**Learn them in this order:**
+**Operations:**
 
 1. `insert` creates documents without reading existing data.
 2. `update` changes documents that already exist.
@@ -978,16 +969,6 @@ These are the primary API for storing and retrieving JSON. They all operate on t
 8. `delete` soft-deletes or permanently purges.
 9. `set_ttl` schedules or clears future expiration.
 10. `transaction` atomically applies multiple mutations.
-
-### Choosing a write operation
-
-| Situation | Use |
-|---|---|
-| Definitely a create; must not touch existing rows | `insert` |
-| Definitely an edit; must not create anything | `update` |
-| Either, decided by a natural key | `upsert` |
-| Many unrelated mutations that must land together | `transaction` |
-| Millions of rows from a file | `import_jsonl` |
 
 ### Shared write behavior
 
@@ -2079,7 +2060,7 @@ The update fails because `data._id` is missing. Its savepoint rolls back, the in
 
 ---
 
-## Operator families
+### Operators
 
 The document API uses four named operator families plus a smaller relationship-specific one.
 
@@ -2095,7 +2076,7 @@ Projection is **not** an operator family: `fields` and `exclude_fields` shape th
 
 ---
 
-## Filter operators
+### Filter operators
 
 A filter is an object whose ordinary keys are document field paths and whose `$` keys are operators. Dot notation addresses nested fields. Multiple fields in one object are implicitly joined with **AND**.
 
@@ -2114,7 +2095,7 @@ Multiple operators on one field are also ANDed:
 { "profile.age": {"$gte": 18, "$lt": 65} }
 ```
 
-### Logical
+#### Logical
 
 | Operator | Operand | Definition | Example |
 |---|---|---|---|
@@ -2123,7 +2104,7 @@ Multiple operators on one field are also ANDed:
 | `$nor` | Non-empty filter array | None of the children may match. | `{"$nor":[{"status":"banned"},{"status":"deleted"}]}` |
 | `$not` | One filter object | Negates the nested filter. | `{"$not":{"profile.country":"US"}}` |
 
-### Comparison
+#### Comparison
 
 | Operator | Operand | Definition | Example |
 |---|---|---|---|
@@ -2136,7 +2117,7 @@ Multiple operators on one field are also ANDed:
 | `$between` | Exactly two values | Inclusively between lower and upper. | `{"profile.age":{"$between":[18,65]}}` |
 | `$exists` | Boolean | `true` requires a non-null path; `false` requires missing or null. | `{"profile.phone":{"$exists":true}}` |
 
-### Membership and arrays
+#### Membership and arrays
 
 | Operator | Operand | Definition | Example |
 |---|---|---|---|
@@ -2156,7 +2137,7 @@ Multiple operators on one field are also ANDed:
 { "members": {"$size": 3}, "events": {"$size": {"$gt": 0}} }
 ```
 
-### Array wildcards
+#### Array wildcards
 
 Use `[]` in a field path when the element index is unknown. **Each wildcard path is an independent existential condition.**
 
@@ -2174,7 +2155,7 @@ This means *some* element has `name == "Ada"` and *some* element has `age >= 18`
 - Only the exact `[]` suffix is accepted; `[*]` is invalid.
 - Wildcard paths work anywhere the shared filter compiler is used — document filters, identity `data.*` filters, and file `metadata.*` filters.
 
-### String
+#### String
 
 | Operator | Operand | Definition | Example |
 |---|---|---|---|
@@ -2187,7 +2168,7 @@ This means *some* element has `name == "Ada"` and *some* element has `age >= 18`
 | `$icontains` | String | Case-insensitive substring. | `{"title":{"$icontains":"database"}}` |
 | `$regex` | Regex pattern | Matches via SQLite's registered `REGEXP` function. | `{"code":{"$regex":"^[A-Z]{3}-[0-9]+$"}}` |
 
-### Type
+#### Type
 
 | Operator | Operand | Definition | Example |
 |---|---|---|---|
@@ -2195,7 +2176,7 @@ This means *some* element has `name == "Ada"` and *some* element has `age >= 18`
 
 Tokens: `number`, `boolean`, `string`, `array`, `object`, `null`, `integer`, `real`, `text`, `true`, `false`.
 
-### Complete example
+#### Complete example
 
 ```json
 {
@@ -2240,7 +2221,7 @@ Tokens: `number`, `boolean`, `string`, `array`, `object`, `null`, `integer`, `re
 
 ---
 
-## Sorting
+### Sorting
 
 `sort` accepts an object or a comma-separated string. Dot paths are supported; a missing direction means ascending.
 
@@ -2267,7 +2248,7 @@ The last form normalizes to `first_name ASC, last_name ASC`.
 
 ---
 
-## Projection
+### Projection
 
 Projection shapes returned documents without modifying stored data. It runs **after** lookups and per-row compute, so projected responses can include or remove lookup aliases and computed fields.
 
@@ -2279,7 +2260,7 @@ Projection shapes returned documents without modifying stored data. It runs **af
 | Dot paths | Preserve nested object structure rather than flattening keys. |
 | Protected | `_id`, `_user_id`, and an included `_namespace` cannot be excluded. |
 
-### `fields` — inclusion
+#### `fields` — inclusion
 
 ```json
 { "fields": ["name", "profile.city", "settings.theme"] }
@@ -2315,7 +2296,7 @@ Given:
 }
 ```
 
-### `exclude_fields` — exclusion
+#### `exclude_fields` — exclusion
 
 ```json
 { "exclude_fields": ["password", "security.ssn", "internal.notes"] }
@@ -2339,7 +2320,7 @@ Given `{"_id":"u1","profile":{"city":"London","country":"GB"},"security":{"ssn":
 }
 ```
 
-### Combining both
+#### Combining both
 
 ```json
 {
@@ -2350,7 +2331,7 @@ Given `{"_id":"u1","profile":{"city":"London","country":"GB"},"security":{"ssn":
 
 `exclude_fields` cannot restore a path omitted by `fields`; it only removes data from the inclusion result.
 
-### Arrays
+#### Arrays
 
 Projection dot notation traverses nested **objects**. Arrays are projected as complete values, not element-by-element schemas. Given:
 
@@ -2366,7 +2347,7 @@ Projection dot notation traverses nested **objects**. Arrays are projected as co
 
 `"fields": ["items"]` returns the full array. A path like `items[].sku` does **not** reshape every element. If element-level shaping is required: store the shape directly, use a lookup whose related documents have their own `fields`, or transform the response in the application.
 
-### System and query-generated fields
+#### System and query-generated fields
 
 | Field | Projection behavior |
 |---|---|
@@ -2393,7 +2374,7 @@ FTS projection:
 }
 ```
 
-### Processing order
+#### Processing order
 
 1. Retrieve and decorate base documents with configured timestamps and namespace metadata.
 2. Overlay pending accepted-write state for exact-ID reads.
@@ -2405,7 +2386,7 @@ FTS projection:
 
 Top-level `fields` and `exclude_fields` do **not** project the user attachment map — use `attach_user_fields`.
 
-### Availability by context
+#### Availability by context
 
 | Context | Supported controls | Notes |
 |---|---|---|
@@ -2415,7 +2396,7 @@ Top-level `fields` and `exclude_fields` do **not** project the user attachment m
 | Individual lookup | `fields` only | `exclude_fields` is not a lookup property. |
 | `attach_users` | `attach_user_fields` | Its own attachment-specific projection. |
 
-### Worked example
+#### Worked example
 
 Stored document:
 
@@ -2469,14 +2450,14 @@ Projecting lookup and computed fields:
 
 ---
 
-## Lookup operators
+### Lookup operators
 
 Lookups enrich each query result with documents from another namespace **in the same database**. `payload.lookups` is an object map: each key is the response alias, each value is a lookup specification.
 
 - `local_field` always reads from the **current result context**.
 - `foreign_field` always reads from **candidate documents** in the `from` namespace.
 
-### Properties
+#### Properties
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -2496,7 +2477,7 @@ Lookups enrich each query result with documents from another namespace **in the 
 | `cache_lookup` | bool | `true` | Reuses identical foreign candidate reads within the current request. |
 | `lookups` | object | — | Nested lookup map evaluated against matched foreign documents. |
 
-### `from` — foreign namespace
+#### `from` — foreign namespace
 
 Names the namespace holding candidates. Lookups stay inside the database selected by the outer request; **they cannot join across database files**.
 
@@ -2508,7 +2489,7 @@ Names the namespace holding candidates. Lookups stay inside the database selecte
 }
 ```
 
-### `local_field` — current-side values
+#### `local_field` — current-side values
 
 Resolves values from the current result context. A plain path is equivalent to `$self.<path>`.
 
@@ -2530,7 +2511,7 @@ Context prefixes enable nested and dependency-aware paths:
 { "local_field": "$lookup.items[].product_id" }
 ```
 
-### `foreign_field` — related-side values
+#### `foreign_field` — related-side values
 
 Always evaluated on candidates from `from`. Nested paths use dot notation:
 
@@ -2546,7 +2527,7 @@ Flatten a foreign array when matching one local value against its members:
 
 Candidates missing the foreign path simply do not match. `strict_path` applies to **current-context** paths and dynamic filter tokens, not to every candidate's foreign path.
 
-### `multi` — response cardinality
+#### `multi` — response cardinality
 
 `multi: false` returns one object — the first relationship match after lookup sorting — or `null`:
 
@@ -2567,7 +2548,7 @@ Candidates missing the foreign path simply do not match. `strict_path` applies t
 
 Use `multi: false` for one-to-one and many-to-one; `multi: true` for one-to-many and many-to-many.
 
-### `filter` — restricting foreign candidates
+#### `filter` — restricting foreign candidates
 
 Applies filter operators only to the `from` namespace, evaluated **before** relationship matching. Static and context-derived values may be combined.
 
@@ -2603,7 +2584,7 @@ Applies filter operators only to the `from` namespace, evaluated **before** rela
 
 Any string filter value beginning with `$root.`, `$parent.`, `$self.`, or `$lookup.` is resolved from that context before the foreign query runs.
 
-### `fields` — lookup-level projection
+#### `fields` — lookup-level projection
 
 Applies inclusion projection to each matched foreign document before attaching it. `_id` remains protected. Lookup candidate loading does **not** attach the document table's external `_user_id` column to related documents.
 
@@ -2635,7 +2616,7 @@ Lookup specifications do not support `exclude_fields` — use an explicit `field
 >
 > Omitting `vendor_id` here would leave the nested vendor lookup without its local value.
 
-### `sort` and `limit` — choosing related results
+#### `sort` and `limit` — choosing related results
 
 `sort` orders foreign candidates before `multi: false` picks its first match and before `limit` truncates a multi-result.
 
@@ -2656,7 +2637,7 @@ Lookup specifications do not support `exclude_fields` — use an explicit `field
 
 > Keep lookup limits bounded: the cap applies **per root document, per lookup alias**. A page of 50 roots with `limit: 100` is 5,000 related documents.
 
-### `preserve_order` and `dedupe`
+#### `preserve_order` and `dedupe`
 
 `preserve_order: true` is meaningful for `$in`: it reorders matched foreign documents according to the flattened local values. Useful for ordered id lists such as favorites, playlists, or manually ranked content.
 
@@ -2673,7 +2654,7 @@ Lookup specifications do not support `exclude_fields` — use an explicit `field
 }
 ```
 
-### `on_missing` — no-match behavior
+#### `on_missing` — no-match behavior
 
 Applies when the local path resolves no values or no foreign document matches.
 
@@ -2685,7 +2666,7 @@ Applies when the local path resolves no values or no foreign document matches.
 
 > `on_missing: "drop"` behaves like a required relationship. It removes root documents **after** lookup processing, so `data.count` for the page can be lower than expected while `data.total_items` still reflects the base query.
 
-### `strict_path` — missing context validation
+#### `strict_path` — missing context validation
 
 With the default `false`, a missing local/context path produces no values and follows `on_missing`. With `true`, a missing `local_field` or a missing context token used by lookup `filter` **rejects the request**.
 
@@ -2695,7 +2676,7 @@ With the default `false`, a missing local/context path produces no values and fo
 
 Use strict paths when a missing relationship key indicates malformed data. Keep the default for optional relationships.
 
-### `cache_lookup` — request-local reuse
+#### `cache_lookup` — request-local reuse
 
 With the default `true`, identical candidate reads inside one query request are reused. The cache key includes the foreign namespace, foreign path, match mode, resolved local values, resolved filter, and sort definition.
 
@@ -2708,7 +2689,7 @@ This cache:
 
 Set `false` when each lookup execution must independently read candidates.
 
-### Lookup match operators
+#### Lookup match operators
 
 | Operator | Typical direction | Meaning | Example paths |
 |---|---|---|---|
@@ -2719,7 +2700,7 @@ Set `false` when each lookup execution must independently read candidates.
 
 The names communicate relationship direction. Internally, the selected local and foreign paths are flattened as requested and compared for intersecting values.
 
-### Path contexts
+#### Path contexts
 
 | Prefix | Resolves from | Typical use |
 |---|---|---|
@@ -2730,7 +2711,7 @@ The names communicate relationship direction. Internally, the selected local and
 
 Array traversal uses `[]`, e.g. `$lookup.items[].product_id`. Sibling aliases that do not depend on each other run **concurrently**. References create a dependency graph; Kokoadb topologically schedules them, permits forward references, and rejects unknown aliases or cycles.
 
-### Nested lookups
+#### Nested lookups
 
 Nested `lookups` run against each document matched by the containing lookup. Each nested alias attaches to that **related** document, not to the root item.
 
@@ -2782,7 +2763,7 @@ Nested `lookups` run against each document matched by the containing lookup. Eac
 }
 ```
 
-### Lookup depth
+#### Lookup depth
 
 Depth counts **nested lookup scopes**, not aliases or dependency edges.
 
@@ -3040,7 +3021,7 @@ Alias order in the request does not control execution. Here `vendors` appears fi
 
 ---
 
-## Compute operators
+### Compute operators
 
 Compute operators have two execution modes:
 
@@ -3060,14 +3041,14 @@ Each compute definition must contain exactly one primary operator. `$distinct: t
 | `$size` | **Not supported** | Array length, object key count, string character count, or `null`. | `"item_count":{"$size":"items"}` |
 | `$join` | **Not supported** | Concatenates literals and `$field.path` references into a string. | `"full_name":{"$join":["$first_name"," ","$last_name"]}` |
 
-### Modifiers
+#### Modifiers
 
 | Modifier | Definition | Example |
 |---|---|---|
 | `$distinct: true` | De-duplicates values before `$count`, `$sum`, or `$avg`. | `{"$count":"country","$distinct":true}` |
 | `$filter: {...}` | Metric-local filter. `aggregate` accepts the full filter operator set. Per-row array filtering accepts `$and`, `$or`, direct equality, `$eq`, `$ne`, `$in`, `$nin`. | `{"$count":"events[]","$filter":{"status":"ok"}}` |
 
-### Aggregate example
+#### Aggregate example
 
 ```json
 {
@@ -3087,7 +3068,7 @@ Each compute definition must contain exactly one primary operator. `$distinct: t
 }
 ```
 
-### Per-row example
+#### Per-row example
 
 ```json
 {
@@ -3122,7 +3103,7 @@ Each compute definition must contain exactly one primary operator. `$distinct: t
 
 ---
 
-## Generator operators
+### Generator operators
 
 Generator operators are exact single-key `@` directive objects embedded anywhere in `data`, `insert_data`, or `update_data`. Recognized directives are resolved immediately before persistence.
 
@@ -3139,7 +3120,7 @@ Generator operators are exact single-key `@` directive objects embedded anywhere
 
 Each occurrence is evaluated independently, including inside array items and nested objects. Prefixes and suffixes appear in the returned string but do **not** count toward `len`.
 
-### `@now`
+#### `@now`
 
 `@now: true` returns the current UTC datetime using the default `%Y-%m-%dT%H:%M:%SZ` format. Shifts apply before formatting.
 
@@ -3195,7 +3176,7 @@ Common format tokens:
 }
 ```
 
-### `@timestamp`
+#### `@timestamp`
 
 Returns the current Unix timestamp in **milliseconds** as a JSON integer. Accepts the same signed `days`, `hours`, `minutes`, `seconds` shifts as `@now`. It does not accept `format` — use `@now` for a formatted string.
 
@@ -3207,7 +3188,7 @@ Returns the current Unix timestamp in **milliseconds** as a JSON integer. Accept
 }
 ```
 
-### `@uuidv4` and `@uuidv7`
+#### `@uuidv4` and `@uuidv7`
 
 `@uuidv4` is random. `@uuidv7` embeds time ordering and is preferable when lexicographically sortable identifiers improve index locality. Both accept the same options.
 
@@ -3225,7 +3206,7 @@ Returns the current Unix timestamp in **milliseconds** as a JSON integer. Accept
 }
 ```
 
-### `@randomid`
+#### `@randomid`
 
 Produces an unbiased secure random string. `len` controls only the generated portion.
 
@@ -3251,7 +3232,7 @@ Produces an unbiased secure random string. `len` controls only the generated por
 }
 ```
 
-### `@hash`
+#### `@hash`
 
 Deterministically hashes one string and returns lowercase hexadecimal.
 
@@ -3271,7 +3252,7 @@ Deterministically hashes one string and returns lowercase hexadecimal.
 
 > `@hash` is **not** password hashing, encryption, or HMAC signing. Passwords, authentication tokens, and keyed signatures must be processed by the application with an appropriate security-specific mechanism.
 
-### Complete write
+#### Complete write
 
 ```json
 {
@@ -3309,7 +3290,7 @@ Generated values vary per execution; the concrete values above illustrate output
 
 ---
 
-## Mutation operators
+### Mutation operators
 
 Mutation operators are for `update`. They operate on the current stored document and support dot-path keys such as `profile.login_count`. Each operator object must be the **complete value** assigned to that path.
 
@@ -3327,7 +3308,7 @@ Mutation operators are for `update`. They operate on the current stored document
 
 `$rename` cannot target `_id`, `_created_at`, or `_modified_at`, and cannot move a field beneath itself.
 
-### Worked example
+#### Worked example
 
 Given:
 
@@ -3373,7 +3354,7 @@ Result:
 }
 ```
 
-### Strictness
+#### Strictness
 
 Controlled by `KOKOADB_STRICT_MUTATIONS_OPERATORS`:
 
@@ -3386,7 +3367,7 @@ Permissive mode is forgiving during migrations; strict mode is better once your 
 
 ---
 
-## Positional array updates
+### Positional array updates
 
 Use named positional selectors when an update should affect only array elements matching a condition. The syntax is `$[name]` in the mutation path, with the condition supplied in `payload.array_filters`.
 
@@ -3431,7 +3412,7 @@ Available in direct `update`, bulk/filter updates, data-array updates, `upsert` 
 
 ---
 
-## Document lifecycle transitions
+### Document lifecycle transitions
 
 Lifecycle transitions are durable, named, **one-time conditional mutations**. Use them when a document should change later only if its state still satisfies a condition — expiring an unaccepted invitation, timing out an unfinished job, publishing content, assigning a TTL after a status change.
 
@@ -3441,7 +3422,7 @@ Compare with TTL:
 - A transition evaluates current document state at `execute_at` and **conditionally** updates fields.
 - A transition may set `ttl_seconds` and `expiry_behavior`, delegating later expiration back to TTL.
 
-### Shape
+#### Shape
 
 `payload.lifecycle` accepts one object or a non-empty array. Every item requires a unique `name`, exactly one time selector, a `when` filter object, and a non-empty `update` object.
 
@@ -3455,7 +3436,7 @@ Compare with TTL:
 | `ttl_seconds` | int | No | `1+` assigns a TTL from execution time; `0` clears the existing TTL. |
 | `expiry_behavior` | string | No | `archive` or `delete`, applied with the transition. |
 
-### Attach to an insert
+#### Attach to an insert
 
 A singular insert can create the document and its transitions in the same SQLite transaction. Bulk `data: [...]` with lifecycle is rejected.
 
@@ -3483,7 +3464,7 @@ A singular insert can create the document and its transitions in the same SQLite
 }
 ```
 
-### Attach multiple transitions to an update
+#### Attach multiple transitions to an update
 
 An explicit-ID update may atomically alter a document and schedule several independent transitions. Filter updates and update arrays cannot carry lifecycle definitions.
 
@@ -3535,7 +3516,7 @@ Committed write responses include scheduling metadata:
 
 > Accepted writes return prepared document acknowledgement data but **do not promise transition ids** before the queued write commits. Use `list_transitions` with the document id, or use committed mode when you need the ids immediately.
 
-### `schedule_transition`
+#### `schedule_transition`
 
 Creates or replaces one named transition without otherwise modifying the document. `document_id` or `id` is required. Namespace is optional because document ids are global; when supplied it is a strict ownership check.
 
@@ -3558,7 +3539,7 @@ Creates or replaces one named transition without otherwise modifying the documen
 }
 ```
 
-### `get_transition` and `list_transitions`
+#### `get_transition` and `list_transitions`
 
 Select one transition with `transition_id`, or with `document_id` plus `name`:
 
@@ -3588,7 +3569,7 @@ Select one transition with `transition_id`, or with `document_id` plus `name`:
 
 Transition items expose `transition_id`, `document_id`, `namespace`, `name`, `execute_at`, `when`, `update`, TTL options, `status`, `attempts`, error/skip diagnostics, and timestamps.
 
-### `cancel_transition` and `retry_transition`
+#### `cancel_transition` and `retry_transition`
 
 Cancellation only changes a `pending` transition, retaining it as `cancelled` history:
 
@@ -3610,7 +3591,7 @@ Execution failures remain `failed`; **there is no automatic retry.** Explicit re
 }
 ```
 
-### Statuses
+#### Statuses
 
 | Status | Meaning |
 |---|---|
@@ -3621,7 +3602,7 @@ Execution failures remain `failed`; **there is no automatic retry.** Explicit re
 | `failed` | Evaluation or update failed; inspect `last_error` and retry explicitly if appropriate. |
 | `cancelled` | Pending execution was intentionally disabled. |
 
-### Execution rules
+#### Execution rules
 
 - The background reaper runs a bounded lifecycle pass for active databases, selecting at most **100 due rows per database pass** and submitting execution through the per-database committed write coordinator.
 - `reap_db` runs both TTL maintenance and due lifecycle transitions immediately.
@@ -3633,9 +3614,9 @@ Execution failures remain `failed`; **there is no automatic retry.** Explicit re
 
 ---
 
-## Import and export
+### Import and export
 
-### `import_jsonl`
+#### `import_jsonl`
 
 Creates a background job that streams newline-delimited JSON into one namespace in bounded batches. Use it instead of `insert` for large files, resumable ingestion, S3 sources, or migrations needing conflict and field-cleanup policies.
 
@@ -3722,7 +3703,7 @@ Use `get_job` to inspect progress, `continue_job` to reopen a resumable failed i
 
 ---
 
-### Browser upload to S3
+#### Browser upload to S3
 
 `create_import_upload_url` creates a short-lived presigned S3 `PUT` request for an import source. Available only when `KOKOADB_STORAGE_MODE=s3`. It is authenticated like every gateway operation and does **not** create, open, or modify the selected database.
 
@@ -3788,7 +3769,7 @@ Use the exact production Admin UI origin instead of `*`. Kokoadb's S3 credential
 
 ---
 
-### `export_jsonl`
+#### `export_jsonl`
 
 Creates a background job that queries documents and writes newline-delimited JSON in bounded parts before finalizing one output object. Use it for data portability, migrations, analytics handoff, offline processing, and large downloads that must not block the gateway.
 
@@ -3866,7 +3847,7 @@ Export archive data to S3:
 
 ---
 
-### Presigned downloads
+#### Presigned downloads
 
 `create_download_url` returns a short-lived presigned S3 `GET` URL for a completed artifact **already known to Kokoadb**. It never accepts an arbitrary object path, which keeps the gateway from becoming a general-purpose signer for unrelated bucket objects.
 
@@ -3925,7 +3906,7 @@ Before signing, Kokoadb performs an S3 `HEAD` to confirm the resolved object exi
 
 ---
 
-### Job control
+#### Job control
 
 All background work shares one job system and these four operations.
 
@@ -3941,279 +3922,6 @@ All background work shares one job system and these four operations.
 ```
 
 Terminal import/export job history is retained for `KOKOADB_JOB_RETENTION_DAYS` (default 30).
-
----
-
-## Metrics events
-
-A lightweight event store for product and SaaS metrics: ingest events, then aggregate them into bucketed, grouped, labeled result sets.
-
-### `metrics_ingest`
-
-Appends one or many metric events.
-
-**Required:** `events` as a non-empty array.
-
-| Event field | Required | Default | Description |
-|---|---|---|---|
-| `event` | Yes | — | Event name, e.g. `api.request`. |
-| `ts` | No | Server UTC now | RFC3339 or `YYYY-MM-DD`. |
-| `value` | No | `1` | Numeric value. |
-| `tenant_id`, `user_id` | No | — | Optional scoping fields. |
-| `dimensions` | No | — | Object of grouping/filtering dimensions. |
-| `metadata` | No | — | Arbitrary context. |
-
-- Ingest defaults to `commit: false` (accepted/queued). Set `commit: true` to wait for the SQLite commit.
-- Event names are registered in `__kdb_metrics_catalog`; dimension paths are registered under the event name.
-
-```json
-{
-  "db": "app/main",
-  "operation": "metrics_ingest",
-  "payload": {
-    "events": [
-      {
-        "event": "api.request",
-        "ts": "2026-06-14T13:22:10Z",
-        "tenant_id": "tenant_123",
-        "user_id": "user_456",
-        "value": 1,
-        "dimensions": {
-          "endpoint": "/v1/chat",
-          "method": "POST",
-          "status": 200,
-          "duration_ms": 183
-        },
-        "metadata": {"request_id": "req_abc"}
-      }
-    ]
-  }
-}
-```
-
-```json
-{
-  "status": "success",
-  "data": {"ids": ["evt_abc"], "queued": true},
-  "ack_mode": "accepted",
-  "ack_status": "queued",
-  "committed": false,
-  "is_async_ack": true
-}
-```
-
-### `metrics_query`
-
-Aggregates metric events into one or many labeled result sets.
-
-**Required:** `event` or `events`; `range` or `start` + `end`; `metrics`.
-
-**Optional:** `alias`, `label`, `interval`, `bucket_label`, `filter`, `group_by`, `sort`, `limit`, `offset`, `batch`, `cache`.
-
-#### Time inputs
-
-| Input | Accepted values |
-|---|---|
-| `start` / `end` | RFC3339 UTC datetime, or `YYYY-MM-DD`. `start` expands to `00:00:00Z`; `end` expands to `23:59:59Z`. |
-| `range` (rolling) | `24h`, `7d`, `3days`, `2weeks`, `4months`, `1year` — meaning `now - range` → `now`. |
-| `range` (calendar) | `today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `this_year`, `last_year` — snapped to UTC calendar boundaries. |
-
-Dash aliases are normalized to underscores: `last-month` → `last_month`.
-
-#### Metric operations
-
-`count`, `sum`, `avg`, `min`, `max`, `distinct`, `count_distinct`.
-
-#### Caching
-
-Enabled by default with `KOKOADB_METRIC_EVENTS_CACHE_TTL_SECS=30`. `metrics_ingest` does **not** invalidate the cache on every ingest. `cache: false` bypasses; `cache: N` caches for N seconds; `cache: -1` invalidates the metrics cache for the database.
-
-#### Response shape
-
-- `data.results` is always keyed by result alias.
-- Each result includes normalized `range`, `start`, `end`, and `interval`.
-- Item group values live under `items[].groups`; computed values under `items[].metrics`.
-
-```json
-{
-  "db": "app/main",
-  "operation": "metrics_query",
-  "payload": {
-    "alias": "api_requests",
-    "label": "API Requests",
-    "event": "api.request",
-    "start": "2026-06-14",
-    "end": "2026-06-14",
-    "interval": "hour",
-    "bucket_label": "{{bucket HH:mm}}",
-    "filter": {
-      "tenant_id": "tenant_123",
-      "dimensions.status": {"$gte": 200}
-    },
-    "group_by": [
-      {"field": "dimensions.endpoint", "alias": "endpoint", "label": "Endpoint"}
-    ],
-    "metrics": [
-      {"op": "count", "field": "*", "alias": "requests", "label": "Requests"},
-      {"op": "avg", "field": "dimensions.duration_ms", "alias": "avg_duration_ms", "label": "Avg duration"}
-    ],
-    "sort": "bucket asc, requests desc"
-  }
-}
-```
-
-```json
-{
-  "status": "success",
-  "data": {
-    "count": 1,
-    "results": {
-      "api_requests": {
-        "alias": "api_requests",
-        "label": "API Requests",
-        "range": null,
-        "start": "2026-06-14T00:00:00Z",
-        "end": "2026-06-14T23:59:59Z",
-        "interval": "hour",
-        "labels": {
-          "groups": {"bucket": "Bucket", "bucket_label": "Bucket Label", "endpoint": "Endpoint"},
-          "metrics": {"requests": "Requests", "avg_duration_ms": "Avg duration"}
-        },
-        "count": 1,
-        "items": [
-          {
-            "bucket": "2026-06-14T13:00:00Z",
-            "bucket_label": "13:00",
-            "groups": {"endpoint": "/v1/chat"},
-            "metrics": {"requests": 120, "avg_duration_ms": 183.4}
-          }
-        ],
-        "warnings": []
-      }
-    }
-  }
-}
-```
-
-#### Batch
-
-Run several independent metric queries in one request. Each entry needs its own `alias`.
-
-```json
-{
-  "db": "app/main",
-  "operation": "metrics_query",
-  "payload": {
-    "batch": [
-      {
-        "alias": "api_requests",
-        "event": "api.request",
-        "range": "24h",
-        "interval": "hour",
-        "metrics": [{"op": "count", "field": "*", "alias": "requests", "label": "Requests"}]
-      },
-      {
-        "alias": "signups",
-        "event": "user.signup",
-        "range": "7d",
-        "interval": "day",
-        "metrics": [{"op": "count", "field": "*", "alias": "signups", "label": "Signups"}]
-      }
-    ]
-  }
-}
-```
-
-### `metrics_catalog`
-
-Lists discovered event names and dimension paths.
-
-**Optional:** `type` (`event` or `dimension`), `name` (context key; for dimensions this is the event name), `value` (exact catalog value), `limit`, `offset`.
-
-Catalog row shapes:
-
-```json
-{"type": "event", "name": "name", "value": "api.request"}
-{"type": "dimension", "name": "api.request", "value": "dimensions.endpoint"}
-```
-
-List event names:
-
-```json
-{ "db": "app/main", "operation": "metrics_catalog", "payload": {"type": "event"} }
-```
-
-List dimensions for one event:
-
-```json
-{ "db": "app/main", "operation": "metrics_catalog", "payload": {"type": "dimension", "name": "api.request"} }
-```
-
----
-
-## Audit logs
-
-Audit logs store application-supplied activity as **immutable rows** in `__kdb_audit_logs`, ordered by `ts`.
-
-Kokoadb does not infer an actor from the access key and does not automatically audit every gateway request. Your application explicitly records the events that carry useful business context.
-
-**Rules**
-
-- `audit_ingest` requires a non-empty `events[]`, and every event requires `action`.
-- `_id` defaults to a dashless UUIDv4 with an `aud_` prefix.
-- `ts` defaults to server UTC now; accepts RFC3339 or `YYYY-MM-DD`.
-- `status` defaults to `success`; applications may use their own vocabulary.
-- `audit_ingest` defaults to `commit: true`; callers may choose accepted acknowledgement with `commit: false`.
-- There are **no update or delete** audit operations.
-- `data` may contain arbitrary JSON context.
-
-### `audit_ingest`
-
-```json
-{
-  "db": "app/main",
-  "operation": "audit_ingest",
-  "payload": {
-    "commit": true,
-    "events": [
-      {
-        "action": "user.login",
-        "actor_type": "user",
-        "actor_id": "user_123",
-        "target_type": "session",
-        "target_id": "session_456",
-        "status": "success",
-        "source": "api",
-        "request_id": "req_789",
-        "ip_address": "203.0.113.10",
-        "message": "User signed in with Google",
-        "data": {"provider": "google"}
-      }
-    ]
-  }
-}
-```
-
-### `audit_query`
-
-Results use the standard `items`, `total_items`, `limit`, `offset`, and nested `pagination` shape.
-
-**Optional payload:** `search` (case-insensitive across action, message, actor id, target id), `action`, `actor_type`, `actor_id`, `target_type`, `target_id`, `start`, `end` (RFC3339 or `YYYY-MM-DD`), `page`, `per_page`, `limit`, `offset`.
-
-```json
-{
-  "db": "app/main",
-  "operation": "audit_query",
-  "payload": {
-    "action": "user.login",
-    "actor_id": "user_123",
-    "start": "2026-07-01",
-    "end": "2026-07-31",
-    "page": 1,
-    "per_page": 25
-  }
-}
-```
 
 ---
 
@@ -4579,6 +4287,7 @@ File operations store metadata for files or objects your application uploads els
 - `created_at` is when the metadata row was registered in Kokoadb.
 - `owner_type` + `owner_id` are optional generic attachment fields, e.g. `user` + `user_123`, or `invoice` + `inv_001`.
 - `file_delete` soft-deletes by setting `status=deleted` and `deleted_at`; `purge: true` hard-deletes the metadata row only.
+- Deleted file metadata is hidden from `file_get`, `file_query`, and `get_data_count`. A later `file_delete` with `purge: true` may still permanently remove the hidden row.
 
 ### `file_create`
 
@@ -4606,6 +4315,8 @@ File operations store metadata for files or objects your application uploads els
 
 ### `file_get`
 
+Returns `item: null` when the id does not exist or was soft-deleted.
+
 ```json
 { "db": "app/main", "operation": "file_get", "payload": {"id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001"} }
 ```
@@ -4613,6 +4324,8 @@ File operations store metadata for files or objects your application uploads els
 ### `file_query`
 
 **Optional:** `bucket`, `status`, `owner_type`, `owner_id`, `storage_backend`, `content_type`, `search` or `q`, `filter`, `page`, `per_page`, `limit`, `offset`.
+
+Only visible, non-deleted records are queried. Rows with `deleted_at` set or `status=deleted` are excluded even when the request supplies another status/filter combination.
 
 > The `filter` object queries the application-defined JSON metadata object. **Every field path must begin with `metadata.`** Dedicated-column selectors can be combined with the JSON filter; all conditions must match.
 
@@ -4676,7 +4389,306 @@ Query nested metadata and an array value:
 { "db": "app/main", "operation": "file_delete", "payload": {"id": "f9c1b3a9e2a84f9aa0bdb88e8c12f001", "purge": true} }
 ```
 
+The default soft delete preserves the metadata row for retention or recovery purposes but removes it from normal reads and counts. `purge: true` hard-deletes the metadata row, including a row that was already soft-deleted. Neither mode deletes the actual file bytes from the application-managed storage backend.
+
 ---
+
+
+## Metrics events
+
+A lightweight event store for product and SaaS metrics: ingest events, then aggregate them into bucketed, grouped, labeled result sets.
+
+### `metrics_ingest`
+
+Appends one or many metric events.
+
+**Required:** `events` as a non-empty array.
+
+| Event field | Required | Default | Description |
+|---|---|---|---|
+| `event` | Yes | — | Event name, e.g. `api.request`. |
+| `ts` | No | Server UTC now | RFC3339 or `YYYY-MM-DD`. |
+| `value` | No | `1` | Numeric value. |
+| `tenant_id`, `user_id` | No | — | Optional scoping fields. |
+| `dimensions` | No | — | Object of grouping/filtering dimensions. |
+| `metadata` | No | — | Arbitrary context. |
+
+- Ingest defaults to `commit: false` (accepted/queued). Set `commit: true` to wait for the SQLite commit.
+- Event names are registered in `__kdb_metrics_catalog`; dimension paths are registered under the event name.
+
+```json
+{
+  "db": "app/main",
+  "operation": "metrics_ingest",
+  "payload": {
+    "events": [
+      {
+        "event": "api.request",
+        "ts": "2026-06-14T13:22:10Z",
+        "tenant_id": "tenant_123",
+        "user_id": "user_456",
+        "value": 1,
+        "dimensions": {
+          "endpoint": "/v1/chat",
+          "method": "POST",
+          "status": 200,
+          "duration_ms": 183
+        },
+        "metadata": {"request_id": "req_abc"}
+      }
+    ]
+  }
+}
+```
+
+```json
+{
+  "status": "success",
+  "data": {"ids": ["evt_abc"], "queued": true},
+  "ack_mode": "accepted",
+  "ack_status": "queued",
+  "committed": false,
+  "is_async_ack": true
+}
+```
+
+### `metrics_query`
+
+Aggregates metric events into one or many labeled result sets.
+
+**Required:** `event` or `events`; `range` or `start` + `end`; `metrics`.
+
+**Optional:** `alias`, `label`, `interval`, `bucket_label`, `filter`, `group_by`, `sort`, `limit`, `offset`, `batch`, `cache`.
+
+#### Time inputs
+
+| Input | Accepted values |
+|---|---|
+| `start` / `end` | RFC3339 UTC datetime, or `YYYY-MM-DD`. `start` expands to `00:00:00Z`; `end` expands to `23:59:59Z`. |
+| `range` (rolling) | `24h`, `7d`, `3days`, `2weeks`, `4months`, `1year` — meaning `now - range` → `now`. |
+| `range` (calendar) | `today`, `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `this_year`, `last_year` — snapped to UTC calendar boundaries. |
+
+Dash aliases are normalized to underscores: `last-month` → `last_month`.
+
+#### Metric operations
+
+`count`, `sum`, `avg`, `min`, `max`, `distinct`, `count_distinct`.
+
+#### Caching
+
+Enabled by default with `KOKOADB_METRIC_EVENTS_CACHE_TTL_SECS=30`. `metrics_ingest` does **not** invalidate the cache on every ingest. `cache: false` bypasses; `cache: N` caches for N seconds; `cache: -1` invalidates the metrics cache for the database.
+
+#### Response shape
+
+- `data.results` is always keyed by result alias.
+- Each result includes normalized `range`, `start`, `end`, and `interval`.
+- Item group values live under `items[].groups`; computed values under `items[].metrics`.
+
+```json
+{
+  "db": "app/main",
+  "operation": "metrics_query",
+  "payload": {
+    "alias": "api_requests",
+    "label": "API Requests",
+    "event": "api.request",
+    "start": "2026-06-14",
+    "end": "2026-06-14",
+    "interval": "hour",
+    "bucket_label": "{{bucket HH:mm}}",
+    "filter": {
+      "tenant_id": "tenant_123",
+      "dimensions.status": {"$gte": 200}
+    },
+    "group_by": [
+      {"field": "dimensions.endpoint", "alias": "endpoint", "label": "Endpoint"}
+    ],
+    "metrics": [
+      {"op": "count", "field": "*", "alias": "requests", "label": "Requests"},
+      {"op": "avg", "field": "dimensions.duration_ms", "alias": "avg_duration_ms", "label": "Avg duration"}
+    ],
+    "sort": "bucket asc, requests desc"
+  }
+}
+```
+
+```json
+{
+  "status": "success",
+  "data": {
+    "count": 1,
+    "results": {
+      "api_requests": {
+        "alias": "api_requests",
+        "label": "API Requests",
+        "range": null,
+        "start": "2026-06-14T00:00:00Z",
+        "end": "2026-06-14T23:59:59Z",
+        "interval": "hour",
+        "labels": {
+          "groups": {"bucket": "Bucket", "bucket_label": "Bucket Label", "endpoint": "Endpoint"},
+          "metrics": {"requests": "Requests", "avg_duration_ms": "Avg duration"}
+        },
+        "count": 1,
+        "items": [
+          {
+            "bucket": "2026-06-14T13:00:00Z",
+            "bucket_label": "13:00",
+            "groups": {"endpoint": "/v1/chat"},
+            "metrics": {"requests": 120, "avg_duration_ms": 183.4}
+          }
+        ],
+        "warnings": []
+      }
+    }
+  }
+}
+```
+
+#### Batch
+
+Run several independent metric queries in one request. Each entry needs its own `alias`.
+
+```json
+{
+  "db": "app/main",
+  "operation": "metrics_query",
+  "payload": {
+    "batch": [
+      {
+        "alias": "api_requests",
+        "event": "api.request",
+        "range": "24h",
+        "interval": "hour",
+        "metrics": [{"op": "count", "field": "*", "alias": "requests", "label": "Requests"}]
+      },
+      {
+        "alias": "signups",
+        "event": "user.signup",
+        "range": "7d",
+        "interval": "day",
+        "metrics": [{"op": "count", "field": "*", "alias": "signups", "label": "Signups"}]
+      }
+    ]
+  }
+}
+```
+
+### `metrics_catalog`
+
+Lists discovered event names and dimension paths.
+
+**Optional:** `type` (`event` or `dimension`), `name` (context key; for dimensions this is the event name), `value` (exact catalog value), `limit`, `offset`.
+
+Catalog row shapes:
+
+```json
+{"type": "event", "name": "name", "value": "api.request"}
+{"type": "dimension", "name": "api.request", "value": "dimensions.endpoint"}
+```
+
+List event names:
+
+```json
+{ "db": "app/main", "operation": "metrics_catalog", "payload": {"type": "event"} }
+```
+
+List dimensions for one event:
+
+```json
+{ "db": "app/main", "operation": "metrics_catalog", "payload": {"type": "dimension", "name": "api.request"} }
+```
+
+---
+
+## SQL operations
+
+### `sql_execute`
+
+Executes a single SQL statement directly against the current database.
+
+**Required:** `sql`. **Optional:** `params` (positional binds), `commit`.
+
+**Supported statements**
+
+| Category | Statements |
+|---|---|
+| Read | `SELECT`, `WITH`, `EXPLAIN` |
+| Write | `INSERT`, `UPDATE`, `DELETE`, `REPLACE` |
+| DDL | `CREATE TABLE`, `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE … ADD COLUMN` |
+
+**Constraints**
+
+- One statement per request.
+- Any table or index name using the reserved `__kdb_` or `sqlite_` prefixes is rejected.
+- Arbitrary `PRAGMA` is intentionally blocked — use [`sql_get_table_schema`](#sql_get_table_schema) for schema inspection.
+- Always available, and protected by normal gateway authentication.
+- Write statements use the per-database write coordinator: `commit: false` returns after queueing; committed mode waits for the serialized result.
+
+```json
+{
+  "db": "myapp/main",
+  "operation": "sql_execute",
+  "payload": {
+    "sql": "SELECT id, email FROM customers WHERE region = ? ORDER BY id LIMIT 25",
+    "params": ["us-east"]
+  }
+}
+```
+
+### `sql_list_tables`
+
+Lists user-created SQL tables for the current database. No payload required. Excludes `__kdb_*` and SQLite internal tables.
+
+### `sql_get_table_schema`
+
+Returns schema columns for one user-created table. **Required:** `table`. Excludes internal tables.
+
+This is the safe schema-inspection operation, since `sql_execute` blocks arbitrary `PRAGMA`.
+
+```json
+{ "db": "myapp/main", "operation": "sql_get_table_schema", "payload": {"table": "customers"} }
+```
+
+---
+
+## Search & Indexes 
+
+### Manual indexes
+
+| Operation | Required | Optional |
+|---|---|---|
+| `create_index` | `index_path` | `index_name` |
+| `drop_index` | `index_name` or `index_path` | — |
+| `list_indexes` | — | — |
+
+Kokoadb also indexes automatically: query heatmaps identify frequently filtered or sorted JSON paths and create bounded expression indexes without intervention. Manual indexes complement that for paths you already know are hot.
+
+```json
+{ "db": "myapp/main", "operation": "create_index", "payload": {"index_path": "profile.email"} }
+```
+
+### Full-text search
+
+FTS uses SQLite FTS5 over **live documents only**.
+
+| Operation | Required | Optional | Purpose |
+|---|---|---|---|
+| `enable_fts_index` | — | `enable` (default `true`) | Toggles the database-level FTS accessibility flag only. |
+| `reindex_fts` | — | — | Enqueues an async rebuild/backfill job. |
+| `drop_fts_index` | — | — | Enqueues an async drop job. |
+
+**Getting FTS working**
+
+1. `enable_fts_index` with `enable: true` for the database.
+2. `reindex_fts` to create and populate the index. Track it with `get_job`.
+3. Run `query` with `payload.search`.
+
+Querying without both steps fails. See [full-text query](#full-text-query) for search syntax, scoring, and constraints.
+
+---
+
+
 
 ## Namespace lifecycle
 
@@ -4697,7 +4709,7 @@ Includes:
 - Live and archived document totals and bytes
 - Every namespace with live/archive counts and bytes
 - Identity user totals with every current status, plus direct `active` and `inactive` counts
-- File totals, status counts, and summed file size
+- Visible, non-deleted file totals, status counts, and summed file size; soft-deleted rows are excluded
 - Metric event count
 - Every user-created SQLite table and its exact row count — excluding `__kdb_*`, `sqlite_*`, views, virtual tables, and shadow tables
 - `generated_at` in UTC RFC3339
@@ -4801,6 +4813,31 @@ Checks existence — remote-aware in `s3` mode. No payload required.
 
 Copies the current database to another path. **Required:** `to_db_path`.
 
+### `delete_db`
+
+Permanently removes a live database only after producing a recoverable archive backup. It requires top-level `db` and accepts no payload options.
+
+The operation runs in committed mode and performs these steps in order:
+
+1. Verify that the database exists.
+2. In S3 storage mode, force a snapshot/manifest synchronization.
+3. Create a compressed backup using the configured backup backend.
+4. Add `-archive-YYYYMMDDTHHMMSSZ` to the generated backup filename.
+5. Only after the backup succeeds, remove the local database, WAL/SHM files, and all live S3 objects for that database.
+6. Clear its connection, write queue, pending-write state, cache state, runtime counters, and system-catalog inventory row.
+
+If snapshot or backup creation fails, deletion does not begin and the live database remains intact. A successful deletion cannot be rediscovered by `list_all_dbs` because its live local and remote artifacts are gone; the archive backup remains at the returned `backup_path`.
+
+```json
+{
+  "db": "tenant/app.main",
+  "operation": "delete_db",
+  "payload": {}
+}
+```
+
+The response includes `backup_path`, `backup_tag`, `archive_timestamp`, `local_deleted`, and `remote_objects_deleted`. The generated `backup_tag` is `archive-YYYYMMDDTHHMMSSZ`.
+
 ### Backups
 
 | Operation | Required | Optional |
@@ -4840,93 +4877,6 @@ In S3 mode, `manifest.current_snapshot_id` selects the active snapshot. Snapshot
 
 ---
 
-## SQL operations
-
-### `sql_execute`
-
-Executes a single SQL statement directly against the current database.
-
-**Required:** `sql`. **Optional:** `params` (positional binds), `commit`.
-
-**Supported statements**
-
-| Category | Statements |
-|---|---|
-| Read | `SELECT`, `WITH`, `EXPLAIN` |
-| Write | `INSERT`, `UPDATE`, `DELETE`, `REPLACE` |
-| DDL | `CREATE TABLE`, `CREATE INDEX`, `DROP INDEX`, `ALTER TABLE … ADD COLUMN` |
-
-**Constraints**
-
-- One statement per request.
-- Any table or index name using the reserved `__kdb_` or `sqlite_` prefixes is rejected.
-- Arbitrary `PRAGMA` is intentionally blocked — use [`sql_get_table_schema`](#sql_get_table_schema) for schema inspection.
-- Always available, and protected by normal gateway authentication.
-- Write statements use the per-database write coordinator: `commit: false` returns after queueing; committed mode waits for the serialized result.
-
-```json
-{
-  "db": "myapp/main",
-  "operation": "sql_execute",
-  "payload": {
-    "sql": "SELECT id, email FROM customers WHERE region = ? ORDER BY id LIMIT 25",
-    "params": ["us-east"]
-  }
-}
-```
-
-### `sql_list_tables`
-
-Lists user-created SQL tables for the current database. No payload required. Excludes `__kdb_*` and SQLite internal tables.
-
-### `sql_get_table_schema`
-
-Returns schema columns for one user-created table. **Required:** `table`. Excludes internal tables.
-
-This is the safe schema-inspection operation, since `sql_execute` blocks arbitrary `PRAGMA`.
-
-```json
-{ "db": "myapp/main", "operation": "sql_get_table_schema", "payload": {"table": "customers"} }
-```
-
----
-
-## Indexes and full-text search
-
-### Manual indexes
-
-| Operation | Required | Optional |
-|---|---|---|
-| `create_index` | `index_path` | `index_name` |
-| `drop_index` | `index_name` or `index_path` | — |
-| `list_indexes` | — | — |
-
-Kokoadb also indexes automatically: query heatmaps identify frequently filtered or sorted JSON paths and create bounded expression indexes without intervention. Manual indexes complement that for paths you already know are hot.
-
-```json
-{ "db": "myapp/main", "operation": "create_index", "payload": {"index_path": "profile.email"} }
-```
-
-### Full-text search
-
-FTS uses SQLite FTS5 over **live documents only**.
-
-| Operation | Required | Optional | Purpose |
-|---|---|---|---|
-| `enable_fts_index` | — | `enable` (default `true`) | Toggles the database-level FTS accessibility flag only. |
-| `reindex_fts` | — | — | Enqueues an async rebuild/backfill job. |
-| `drop_fts_index` | — | — | Enqueues an async drop job. |
-
-**Getting FTS working**
-
-1. `enable_fts_index` with `enable: true` for the database.
-2. `reindex_fts` to create and populate the index. Track it with `get_job`.
-3. Run `query` with `payload.search`.
-
-Querying without both steps fails. See [full-text query](#full-text-query) for search syntax, scoring, and constraints.
-
----
-
 ## System and monitoring
 
 ### Instance inventory
@@ -4947,6 +4897,7 @@ The system catalog lives at `${KOKOADB_DATA_DIR}/__kdb_system.db` and is always 
 |---|---|---|
 | `system_get_inventory` | Global | Reads database inventory from the catalog. Does **not** scan or refresh. Accepts `limit`, `offset`. |
 | `system_refresh_inventory` | Global | Scans local/S3 known databases and upserts current state. Records a `system.inventory_refreshed` event. |
+| `purge_system_db` | Global | Deletes the local `${KOKOADB_DATA_DIR}/__kdb_system.db` (including WAL/SHM), recreates it, and repopulates inventory from databases currently discoverable locally or in S3. Accepts no payload options. |
 | `system_get_db_status` | Global, requires top-level `db` | Live status plus the catalog row. |
 | `system_snapshot_db_stats` | Global | With no `db`, snapshots currently active databases. With `db`, snapshots that one. Writes to `__kdb_system_db_stats`. |
 | `system_query_db_stats` | Global, optional `db` | Optional `start`, `end` (RFC3339), `limit` (default 100), `offset` (default 0). |
@@ -4957,6 +4908,7 @@ The background reaper cadence also snapshots active databases into the catalog. 
 ```json
 { "operation": "system_get_inventory", "payload": {"limit": 100, "offset": 0} }
 { "operation": "system_refresh_inventory", "payload": {} }
+{ "operation": "purge_system_db", "payload": {} }
 { "db": "app/main", "operation": "system_get_db_status", "payload": {} }
 { "db": "app/main", "operation": "system_query_db_stats", "payload": {"limit": 100} }
 { "operation": "system_list_db_events", "payload": {"limit": 50} }
@@ -5333,8 +5285,6 @@ Compact copy/paste requests. All examples use `db: "myapp/main"`; add the `X-Acc
 { "db":"myapp/main", "operation":"metrics_ingest", "payload":{"events":[{"event":"api.request","dimensions":{"endpoint":"/v1/chat","duration_ms":120}}]} }
 { "db":"myapp/main", "operation":"metrics_query", "payload":{"event":"api.request","range":"24h","interval":"hour","metrics":[{"op":"count","field":"*","alias":"requests","label":"Requests"}]} }
 { "db":"myapp/main", "operation":"metrics_catalog", "payload":{"type":"event"} }
-{ "db":"myapp/main", "operation":"audit_ingest", "payload":{"events":[{"action":"user.login","actor_type":"user","actor_id":"u1"}]} }
-{ "db":"myapp/main", "operation":"audit_query", "payload":{"action":"user.login","page":1,"per_page":25} }
 { "db":"myapp/main", "operation":"user_create", "payload":{"email":"a@b.com","password_hash":"$argon2id$...","password_algo":"argon2id"} }
 { "db":"myapp/main", "operation":"user_get", "payload":{"email":"a@b.com"} }
 { "db":"myapp/main", "operation":"user_consume_token", "payload":{"token_hash":"sha256:abc","kind":"password_reset"} }

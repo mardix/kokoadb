@@ -37,6 +37,17 @@ fn default_backup_db_path(state: &AppState, db_path: &str) -> String {
     }
 }
 
+fn archive_backup_db_path(state: &AppState, db_path: &str, backup_tag: &str) -> String {
+    let default_path = default_backup_db_path(state, db_path);
+    if let Some(base) = default_path.strip_suffix(".db.zst") {
+        format!("{base}-{backup_tag}.db.zst")
+    } else if let Some(base) = default_path.strip_suffix(".db") {
+        format!("{base}-{backup_tag}.db")
+    } else {
+        format!("{}-{backup_tag}.db.zst", default_path.trim_end_matches('/'))
+    }
+}
+
 fn json_params_to_sql_values(params: Option<Vec<Value>>) -> AppResult<Vec<libsql::Value>> {
     let mut out = Vec::<libsql::Value>::new();
     for value in params.unwrap_or_default() {
@@ -550,7 +561,6 @@ fn is_write_operation(operation: &str) -> bool {
             | "aggregate"
             | "metrics_query"
             | "metrics_catalog"
-            | "audit_query"
             | "user_get"
             | "user_query"
             | "user_get_details"
@@ -623,6 +633,7 @@ fn supports_accepted_ack(operation: &str) -> bool {
         "import_jsonl"
             | "export_jsonl"
             | "create_backup"
+            | "delete_db"
             | "reindex_fts"
             | "drop_fts_index"
             | "enable_fts_index"
@@ -976,21 +987,6 @@ fn validate_accepted_preflight(req: &GatewayRequest) -> AppResult<()> {
                 ));
             }
         }
-        "audit_ingest" => {
-            let events = req
-                .payload
-                .events
-                .as_ref()
-                .ok_or_else(|| AppError::BadRequest("events is required".to_string()))?;
-            if events.is_empty() {
-                return Err(AppError::BadRequest("events cannot be empty".to_string()));
-            }
-            if events.iter().any(|v| !v.is_object()) {
-                return Err(AppError::BadRequest(
-                    "events items must be objects".to_string(),
-                ));
-            }
-        }
         _ => {}
     }
     Ok(())
@@ -1088,40 +1084,6 @@ fn prepare_accepted_ack_preview(req: &mut GatewayRequest) -> AppResult<Value> {
                     }
                     None => {
                         let generated_id = format!("evt_{}", Uuid::new_v4().simple());
-                        obj.insert("_id".to_string(), Value::String(generated_id.clone()));
-                        generated_id
-                    }
-                };
-                ids.push(id);
-            }
-            ids.sort();
-            ids.dedup();
-            return Ok(json!({
-                "ids": ids,
-                "count": count,
-                "queued": true
-            }));
-        }
-        "audit_ingest" => {
-            let events = req
-                .payload
-                .events
-                .as_mut()
-                .ok_or_else(|| AppError::BadRequest("events is required".to_string()))?;
-            let count = events.len();
-            for event in events.iter_mut() {
-                let obj = event.as_object_mut().ok_or_else(|| {
-                    AppError::BadRequest("events items must be objects".to_string())
-                })?;
-                let id = match obj.get("_id") {
-                    Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
-                    Some(_) => {
-                        return Err(AppError::BadRequest(
-                            "audit event _id must be a non-empty string".to_string(),
-                        ));
-                    }
-                    None => {
-                        let generated_id = format!("aud_{}", Uuid::new_v4().simple());
                         obj.insert("_id".to_string(), Value::String(generated_id.clone()));
                         generated_id
                     }

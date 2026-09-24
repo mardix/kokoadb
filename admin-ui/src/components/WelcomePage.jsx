@@ -26,7 +26,7 @@ export function WelcomePage({ setPage }) {
             <img src="./brand/kokoadb-logo.svg" alt="KokoaDB" className="mt-5 h-auto w-full max-w-[320px]" />
             <h1 className="mt-5 text-4xl font-bold tracking-tight text-slate-900">Admin Console</h1>
             <p className="mt-5 max-w-2xl text-lg font-medium leading-8 text-slate-700">
-              The admin interface for documents, identities, files, metrics, search, audit logs, and SQL, built into KokoaDB.
+              The admin interface for documents, identities, files, metrics, search, and SQL, built into KokoaDB.
               </p>
             <p className="mt-6 max-w-2xl text-sm leading-6 text-slate-600">
               Start by choosing a saved connection. KokoaDB will verify the host, then show the databases available on that instance.

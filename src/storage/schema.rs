@@ -353,46 +353,6 @@ CREATE TRIGGER trg_update AFTER UPDATE OF data, _size_bytes ON __kdb_documents B
 END;
 "#;
 
-const AUDIT_LOGS_SQL: &str = r#"
-CREATE TABLE IF NOT EXISTS __kdb_audit_logs (
-    id TEXT PRIMARY KEY,
-    ts TEXT NOT NULL,
-    action TEXT NOT NULL,
-    actor_type TEXT,
-    actor_id TEXT,
-    target_type TEXT,
-    target_id TEXT,
-    status TEXT NOT NULL DEFAULT 'success',
-    source TEXT,
-    request_id TEXT,
-    ip_address TEXT,
-    message TEXT,
-    data ANY NOT NULL,
-    _created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    _size_bytes INTEGER NOT NULL DEFAULT 0
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx__kdb_audit_logs_ts
-    ON __kdb_audit_logs(ts DESC);
-CREATE INDEX IF NOT EXISTS idx__kdb_audit_logs_action_ts
-    ON __kdb_audit_logs(action, ts DESC);
-CREATE INDEX IF NOT EXISTS idx__kdb_audit_logs_actor_ts
-    ON __kdb_audit_logs(actor_type, actor_id, ts DESC)
-    WHERE actor_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx__kdb_audit_logs_target_ts
-    ON __kdb_audit_logs(target_type, target_id, ts DESC)
-    WHERE target_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx__kdb_audit_logs_status_ts
-    ON __kdb_audit_logs(status, ts DESC);
-"#;
-
-async fn ensure_audit_logs_schema(conn: &Connection) -> AppResult<()> {
-    conn.execute_batch(AUDIT_LOGS_SQL)
-        .await
-        .map(|_| ())
-        .map_err(|e| AppError::Internal(format!("audit logs schema init failed: {e}")))
-}
-
 /// Ensures the single-row internal metadata record exists for this database.
 pub async fn ensure_system_meta(conn: &Connection, default_fts_enabled: bool) -> AppResult<()> {
     let version = env!("CARGO_PKG_VERSION");
@@ -534,7 +494,6 @@ pub async fn init_schema_with_retry(conn: &Connection, default_fts_enabled: bool
             Ok(_) => match async {
                 ensure_identity_schema(conn).await?;
                 ensure_document_metadata_schema(conn).await?;
-                ensure_audit_logs_schema(conn).await?;
                 ensure_system_meta(conn, default_fts_enabled).await
             }
             .await
@@ -647,32 +606,6 @@ mod tests {
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
         assert_eq!(row.get::<i64>(0).unwrap(), 0);
-
-        drop(rows);
-        drop(conn);
-        drop(db);
-        let _ = tokio::fs::remove_file(path).await;
-    }
-
-    #[tokio::test]
-    async fn blank_database_initializes_audit_logs_schema() {
-        let path = std::env::temp_dir().join(format!(
-            "kongodb_audit_schema_{}.db",
-            Uuid::new_v4().simple()
-        ));
-        let db = Builder::new_local(&path).build().await.unwrap();
-        let conn = db.connect().unwrap();
-
-        init_schema_with_retry(&conn, false).await.unwrap();
-        let mut rows = conn
-            .query(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '__kdb_audit_logs'",
-                (),
-            )
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(row.get::<String>(0).unwrap(), "__kdb_audit_logs");
 
         drop(rows);
         drop(conn);

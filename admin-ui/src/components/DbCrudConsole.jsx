@@ -11,7 +11,6 @@ import { PageHeader } from './Layout.jsx';
 import { MetricsEventsPanel } from './MetricsEventsConsole.jsx';
 import { ResponsePanel } from './ResponsePanel.jsx';
 import { FullTextSearchPanel } from './FullTextSearchPanel.jsx';
-import { AuditLogsPanel } from './AuditLogsPanel.jsx';
 import { DocumentUiEditor } from './DocumentUiEditor.jsx';
 
 const operations = ['query', 'multi_query', 'insert', 'update', 'upsert', 'delete', 'count', 'aggregate', 'transaction', 'custom'];
@@ -24,20 +23,19 @@ const DEFAULT_DOCUMENT_TABLE_PREFERENCES = {
 };
 const dbTabs = [
   { id: 'overview', label: 'Overview' },
-  { id: 'crud', label: 'DocumentDB' },
+  { id: 'crud', label: 'Data' },
   { id: 'identity', label: 'Identity' },
   { id: 'files', label: 'Files' },
   { id: 'metrics', label: 'Metrics' },
-  { id: 'fts', label: 'FTSearch' },
-  { id: 'audit', label: 'Audit Logs' },
-  { id: 'sqlite', label: 'SQLiteDB' },
+  { id: 'fts', label: 'Search' },
+  { id: 'sqlite', label: 'SQL' },
   { id: 'query', label: 'Query' },
   { id: 'stats', label: 'Stats' },
   { id: 'admin', label: 'Admin' }
 ];
 const dbSectionHeaders = {
   crud: {
-    eyebrow: 'DocumentDB',
+    eyebrow: 'Data',
     description: 'Browse namespaces, inspect documents, create entries, and build structured document queries.'
   },
   identity: {
@@ -53,15 +51,11 @@ const dbSectionHeaders = {
     description: 'Ingest metric events and query time-based aggregates for this database.'
   },
   fts: {
-    eyebrow: 'FTSearch',
+    eyebrow: 'Search',
     description: 'Search indexed documents across one or more namespaces and manage the database FTS lifecycle.'
   },
-  audit: {
-    eyebrow: 'Audit Logs',
-    description: 'Browse and append immutable application activity with actor, target, status, and request context.'
-  },
   sqlite: {
-    eyebrow: 'SQLiteDB',
+    eyebrow: 'SQL',
     description: 'Browse relational tables, inspect schemas, edit rows, and execute SQLite queries.'
   },
   query: {
@@ -1093,11 +1087,28 @@ export function DbCrudConsole() {
       ) : null}
       {route.tab === 'metrics' ? <MetricsEventsPanel embedded db={activeDb} /> : null}
       {route.tab === 'fts' ? <FullTextSearchPanel db={activeDb} namespaces={activeNamespaces} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
-      {route.tab === 'audit' ? <AuditLogsPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
       {route.tab === 'identity' ? <IdentityPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
       {route.tab === 'files' ? <FileCatalogPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
       {route.tab === 'sqlite' ? <SQLiteDbPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
-      {route.tab === 'admin' ? <DbAdminPanel db={activeDb} namespaces={namespaces} onRefreshNamespaces={() => listNamespaces()} /> : null}
+      {route.tab === 'admin' ? (
+        <DbAdminPanel
+          db={activeDb}
+          namespaces={namespaces}
+          onRefreshNamespaces={() => listNamespaces()}
+          onDeleted={(deletedDb) => {
+            const nextDbs = dbs.filter((item) => dbLabel(item) !== deletedDb);
+            const cached = saveDbInventoryCache(connectionStorageKey, nextDbs);
+            setDbs(nextDbs);
+            setDbInventoryMeta(cached);
+            setNamespaces([]);
+            setActiveNamespaces([]);
+            setNamespaceTabs([]);
+            updateSetting('db', '');
+            updateSetting('namespace', '');
+            window.location.hash = '#crud/home';
+          }}
+        />
+      ) : null}
       {route.tab === 'query' ? (
         <section className="space-y-4">
           <QueryConsole
@@ -1711,13 +1722,12 @@ function DbOverviewPanel({ db, dbInfo, namespaces, stats, dataCount, onOpen, onR
   const errorRate = requestCount > 0 ? `${((errorCount / requestCount) * 100).toFixed(1)}%` : '0%';
   const storage = [truthy(dbInfo?.on_local) ? 'Local' : '', truthy(dbInfo?.on_s3) ? 'S3' : ''].filter(Boolean).join(' + ') || 'Unavailable';
   const tools = [
-    { id: 'crud', title: 'DocumentDB', description: 'Browse namespaces, query documents, and create or update records.', value: formatNumber(liveEntries), detail: `${formatNumber(namespaceCount)} namespaces` },
+    { id: 'crud', title: 'Data', description: 'Browse namespaces, query documents, and create or update records.', value: formatNumber(liveEntries), detail: `${formatNumber(namespaceCount)} namespaces` },
     { id: 'identity', title: 'Identity', description: 'Manage users, providers, tokens, status, and identity events.', value: formatNumber(identityCount), detail: `${formatNumber(activeIdentityCount)} active` },
     { id: 'files', title: 'Files', description: 'Track file metadata, owners, storage paths, and lifecycle state.', value: formatNumber(fileCount), detail: formatBytes(fileBytes) },
     { id: 'metrics', title: 'Metrics', description: 'Ingest metric events and query time-bucketed aggregates.', value: formatNumber(metricEventCount), detail: 'events' },
-    { id: 'fts', title: 'FTSearch', description: 'Search indexed documents and manage full-text index lifecycle.' },
-    { id: 'audit', title: 'Audit Logs', description: 'Browse and append immutable actor and resource activity.' },
-    { id: 'sqlite', title: 'SQLiteDB', description: 'Browse tables, inspect schema, edit rows, and execute SQL.', value: formatNumber(sqlTableCount), detail: `${formatNumber(sqlRowCount)} rows` }
+    { id: 'fts', title: 'Search', description: 'Search indexed documents and manage full-text index lifecycle.' },
+    { id: 'sqlite', title: 'SQL', description: 'Browse tables, inspect schema, edit rows, and execute SQL.', value: formatNumber(sqlTableCount), detail: `${formatNumber(sqlRowCount)} rows` }
   ];
 
   return (
@@ -1824,7 +1834,7 @@ function DatastoreSubnav({ view, onView, namespaces, selected, onSelect, namespa
   return (
     <section className="panel px-3 py-2">
       <div className="flex flex-wrap items-center gap-2.5">
-        <div className="shrink-0 text-md font-semibold text-slate-950">DocumentDB</div>
+        <div className="shrink-0 text-md font-semibold text-slate-950">Data</div>
         <div className="flex shrink-0 flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
           <button onClick={() => onView('home')} className={`btn-tab ${view === 'home' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Data</button>
           <button onClick={() => onView('query')} className={`btn-tab ${view === 'query' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Query</button>
@@ -3749,7 +3759,7 @@ function NamespacesPanel({ namespaces, selected, onSelect, compact = false }) {
           <p className="text-xs text-slate-500">{compact ? 'Select a namespace to browse documents.' : 'Browse namespaces for the selected database. Selecting one opens Datastore with that namespace loaded and its data fetched automatically.'}</p>
         </div>
         <div className={compact ? 'w-full' : 'w-full sm:w-72'}>
-          <Field label="Search namespaces" value={term} onChange={setTerm} placeholder="users, events, audit" />
+          <Field label="Search namespaces" value={term} onChange={setTerm} placeholder="users, events, logs" />
         </div>
       </div>
       <NamespaceTable namespaces={filtered} selected={selected} onSelect={onSelect} compact={compact} emptyMessage={namespaces.length ? 'No namespaces match that search.' : 'No namespaces loaded yet. Use Refresh namespaces after selecting or creating a DB.'} />
@@ -5063,7 +5073,7 @@ function SQLiteDbPanel({ db, gateway, runStatusCall, showToast }) {
       <section className="panel">
         <div className="panel-header-row">
           <div>
-            <h3 className="text-sm font-semibold text-slate-950">SQLiteDB</h3>
+            <h3 className="text-sm font-semibold text-slate-950">SQL</h3>
             <p className="text-xs text-slate-500">Regular SQL workspace for user tables in this database.</p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -5095,7 +5105,7 @@ function SQLiteDbPanel({ db, gateway, runStatusCall, showToast }) {
                   </div>
                 </div>
               );
-            }) : <EmptyCards message="No user tables found. Create one to start using SQLiteDB." />}
+            }) : <EmptyCards message="No user tables found. Create one to start using SQL." />}
           </div>
         </section>
 
@@ -5598,7 +5608,7 @@ function MiniMeta({ label, value }) {
   return <div className="text-xs"><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="mt-0.5 font-mono text-slate-800">{value}</div></div>;
 }
 
-function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
+function DbAdminPanel({ db, namespaces, onRefreshNamespaces, onDeleted }) {
   const { gateway, runStatusCall, showToast } = useAdmin();
   const [response, setResponse] = useState(null);
   const [durationMs, setDurationMs] = useState(null);
@@ -5609,6 +5619,7 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
   const [uploading, setUploading] = useState(false);
   const [exportForm, setExportForm] = useState({ namespace: '', target_path: '', compress: true, include_system_timestamps: true, include_archive: false });
   const [downloadForm, setDownloadForm] = useState({ type: 'export', id: '', latest: false });
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
 
   async function runDbOperation(operation, payload = {}, successMessage = '', requestPatch = {}) {
     const startedAt = performance.now();
@@ -5693,6 +5704,16 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
     document.body.appendChild(link);
     link.click();
     link.remove();
+  }
+
+  async function deleteDatabase() {
+    if (deleteConfirmation !== db) {
+      showToast('Enter the exact database path to confirm deletion', true);
+      return;
+    }
+    if (!window.confirm(`Archive, back up, and permanently delete ${db}?`)) return;
+    const result = await runDbOperation('delete_db', {}, 'Database archived and deleted');
+    if (result?.status === 'success') onDeleted?.(db);
   }
 
   return (
@@ -5866,6 +5887,29 @@ function DbAdminPanel({ db, namespaces, onRefreshNamespaces }) {
         <DbAdminAction title="Recompute Stats" description="Queue global stats recomputation." onRun={() => runDbOperation('recompute_stats', {}, 'Stats recompute queued')} />
         <DbAdminAction title="Load DB" description="Warm/load DB in storage-backed mode." onRun={() => runDbOperation('load_db')} />
       </DbAdminGroup>
+
+      <section className="panel border-rose-200">
+        <div className="panel-header border-rose-200 bg-rose-50/60">
+          <h3 className="text-sm font-semibold text-rose-900">Danger Zone</h3>
+          <p className="text-xs text-rose-700">Deletion first creates a point-in-time snapshot and tagged archive backup, then removes the live local and S3 database artifacts.</p>
+        </div>
+        <div className="grid gap-3 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+          <Field
+            label={`Enter ${db} to confirm`}
+            value={deleteConfirmation}
+            onChange={setDeleteConfirmation}
+            placeholder={db}
+          />
+          <button
+            type="button"
+            onClick={deleteDatabase}
+            disabled={deleteConfirmation !== db}
+            className="btn-danger disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Archive & Delete Database
+          </button>
+        </div>
+      </section>
 
       <section className="panel">
         <div className="panel-header">

@@ -93,7 +93,7 @@ export function FullTextSearchPanel({ db, namespaces, gateway, runStatusCall, sh
     <section className="space-y-4">
       <section className="panel px-3 py-2">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="text-sm font-semibold text-slate-950">FTSearch</div>
+          <div className="text-sm font-semibold text-slate-950">Search</div>
           <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
             <button type="button" onClick={() => setMode('search')} className={`btn-tab ${mode === 'search' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Search</button>
             <button type="button" onClick={() => { setMode('index'); void loadIndexStatus(); }} className={`btn-tab ${mode === 'index' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Index</button>

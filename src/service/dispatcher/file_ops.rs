@@ -78,7 +78,7 @@ async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
     let payload = req.payload;
     let (limit, offset, page) = resolve_pagination_args(&payload, 25)?;
     let limit = limit.clamp(1, 200);
-    let mut clauses = Vec::<String>::new();
+    let mut clauses = vec!["deleted_at IS NULL".to_string(), "lower(status) <> 'deleted'".to_string()];
     let mut binds = Vec::<libsql::Value>::new();
 
     if let Some(bucket) = clean_optional(payload.bucket) {
@@ -262,7 +262,7 @@ async fn file_delete(
         conn.execute(
             "UPDATE __kdb_files
              SET status = 'deleted', deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE id = ?",
+             WHERE id = ? AND deleted_at IS NULL AND lower(status) <> 'deleted'",
             libsql::params![file_id.clone()],
         )
         .await
@@ -295,7 +295,12 @@ async fn fetch_file(conn: &libsql::Connection, file_id: &str) -> AppResult<Value
 async fn fetch_file_optional(conn: &libsql::Connection, file_id: &str) -> AppResult<Option<Value>> {
     let mut rows = conn
         .query(
-            &format!("SELECT {} FROM __kdb_files WHERE id = ? LIMIT 1", file_select()),
+            &format!(
+                "SELECT {} FROM __kdb_files
+                 WHERE id = ? AND deleted_at IS NULL AND lower(status) <> 'deleted'
+                 LIMIT 1",
+                file_select()
+            ),
             libsql::params![file_id.to_string()],
         )
         .await

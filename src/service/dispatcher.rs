@@ -80,6 +80,9 @@ async fn dispatch_inner(
     if req.operation == "system_refresh_inventory" {
         return heap_future(system_refresh_inventory(state)).await;
     }
+    if req.operation == "purge_system_db" {
+        return heap_future(purge_system_db(state, req)).await;
+    }
     if req.operation == "system_get_db_status" {
         return heap_future(system_get_db_status(state, db_path)).await;
     }
@@ -107,9 +110,6 @@ async fn dispatch_inner(
     }
     if req.operation == "metrics_ingest" && req.payload.commit.is_none() {
         req.payload.commit = Some(false);
-    }
-    if req.operation == "audit_ingest" && req.payload.commit.is_none() {
-        req.payload.commit = Some(true);
     }
     let requested_ack_mode = resolve_ack_mode(state, req.payload.commit)?;
     let mut ack_mode_fallback = false;
@@ -236,6 +236,10 @@ async fn dispatch_inner(
         }
     }
 
+    if req.operation == "delete_db" {
+        return heap_future(delete_db(state, db_path, req)).await;
+    }
+
     let allow_create = matches!(req.operation.as_str(), "insert" | "import_jsonl");
     let conn = heap_future(state.db_manager.get_conn_with_create(db_path, allow_create)).await?;
     let operation = req.operation.clone();
@@ -293,8 +297,6 @@ async fn dispatch_inner(
         "metrics_ingest" => heap_future(metrics_ingest(state, db_path, &conn, req)).await,
         "metrics_query" => heap_future(metrics_query(state, db_path, &conn, req)).await,
         "metrics_catalog" => heap_future(metrics_catalog(&conn, req)).await,
-        "audit_ingest" => heap_future(audit_ingest(state, db_path, &conn, req)).await,
-        "audit_query" => heap_future(audit_query(state, &conn, req)).await,
         "user_create" => heap_future(user_create(state, &conn, req)).await,
         "user_get" => heap_future(user_get(&conn, req)).await,
         "user_query" => heap_future(user_query(&conn, req)).await,
@@ -352,7 +354,6 @@ include!("dispatcher/write_ops.rs");
 include!("dispatcher/read_ops.rs");
 include!("dispatcher/archive_ops.rs");
 include!("dispatcher/metric_events_ops.rs");
-include!("dispatcher/audit_logs_ops.rs");
 include!("dispatcher/identity_ops.rs");
 include!("dispatcher/file_ops.rs");
 include!("dispatcher/lifecycle_ops.rs");

@@ -3,13 +3,12 @@ import { useAdmin } from '../context/AdminContext.jsx';
 
 const databaseSections = [
   { id: 'overview', label: 'Home', short: 'H', description: 'Database home' },
-  { id: 'crud', label: 'DocumentDB', short: 'D', description: 'Documents and namespaces' },
+  { id: 'crud', label: 'Data', short: 'D', description: 'Documents and namespaces' },
   { id: 'identity', label: 'Identity', short: 'I', description: 'Users and providers' },
   { id: 'files', label: 'Files', short: 'F', description: 'File metadata' },
+  { id: 'fts', label: 'Search', short: 'Se', description: 'Full-text search' },
+  { id: 'sqlite', label: 'SQL', short: 'S', description: 'Tables and SQL' },
   { id: 'metrics', label: 'Metrics', short: 'M', description: 'Metric events' },
-  { id: 'fts', label: 'FTSearch', short: 'FT', description: 'Full-text search' },
-  { id: 'audit', label: 'Audit Logs', short: 'AU', description: 'Append-only activity' },
-  { id: 'sqlite', label: 'SQLiteDB', short: 'S', description: 'Tables and SQL' },
   { id: 'query', label: 'Query', short: 'Q', description: 'Raw gateway requests' },
   { id: 'stats', label: 'Stats', short: 'T', description: 'Database activity' },
   { id: 'admin', label: 'Admin', short: 'A', description: 'Database operations' }

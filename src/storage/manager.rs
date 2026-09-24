@@ -16,6 +16,12 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeleteDbStorageResult {
+    pub local_deleted: bool,
+    pub remote_objects_deleted: usize,
+}
+
 pub struct MultiDbManager {
     backend: StorageBackend,
     max_active_dbs: usize,
@@ -162,6 +168,17 @@ impl MultiDbManager {
             StorageBackend::Local(engine) => engine.offload_db(db_path).await,
             StorageBackend::S3(engine) => engine.offload_db(db_path).await,
         }
+    }
+
+    pub async fn delete_db(&self, db_path: &str) -> AppResult<DeleteDbStorageResult> {
+        let (local_deleted, remote_objects_deleted) = match &self.backend {
+            StorageBackend::Local(engine) => engine.delete_db(db_path).await?,
+            StorageBackend::S3(engine) => engine.delete_db(db_path).await?,
+        };
+        Ok(DeleteDbStorageResult {
+            local_deleted,
+            remote_objects_deleted,
+        })
     }
 
     pub async fn load_db(&self, db_path: &str) -> AppResult<bool> {
