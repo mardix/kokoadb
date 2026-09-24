@@ -6,11 +6,11 @@ One consistent JSON API, seven capabilities:
 
 | | |
 |---|---|
-| **DocumentDB** | Schemaless JSON in namespaces. Filters, joins, aggregation, projection, TTL, soft delete, and transactions. |
-| **SQLiteDB** | Parameterized SQL against your own tables in the same database, plus table and schema discovery. |
+| **Data** | Schemaless JSON in namespaces. Filters, joins, aggregation, projection, TTL, soft delete, and transactions. |
 | **Identity** | User records, provider links, statuses, and token hashes. Your app authenticates; Kokoadb stores the state. |
 | **Files** | Metadata registry for objects stored elsewhere: ownership, location, hashes, expiry, deletion state. |
 | **Search** | Full-text search (FTS5) over live documents, with background indexing. |
+| **SQL** | Parameterized SQL against your own tables in the same database, plus table and schema discovery. Uses SQLite |
 | **Metrics** | Event ingest with bucketed, grouped aggregation over rolling and calendar ranges. |
 | **Admin** | Backups, snapshots, S3 sync, JSONL import/export, background jobs, and a built-in Admin UI. |
 
