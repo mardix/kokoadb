@@ -595,13 +595,13 @@ async fn main() {
 }
 
 #[cfg(test)]
-mod metadata_update_repro_test {
+mod write_coordinator_repro_tests {
     use super::*;
     use crate::api::dto::{GatewayRequest, NamespaceSelector, OperationPayload};
     use serde_json::{Value, json};
 
     #[tokio::test]
-    async fn metadata_only_update_through_committed_coordinator() {
+    async fn document_and_file_writes_through_committed_coordinator() {
         let root = std::env::temp_dir().join(format!(
             "kongo_metadata_update_{}",
             uuid::Uuid::new_v4().simple()
@@ -783,6 +783,70 @@ mod metadata_update_repro_test {
         assert_eq!(
             item.get("_modified_at").and_then(Value::as_str),
             Some("2026-07-18T02:39:58.123Z")
+        );
+
+        let file_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "file_create".to_string(),
+            namespace: None,
+            payload: OperationPayload {
+                id: Some("9943b6fc1f8e44a182a2db32bb93efea".to_string()),
+                bucket: Some("default".to_string()),
+                content_type: Some("image/jpeg".to_string()),
+                filename: Some("71urTQjbwZL".to_string()),
+                owner_id: Some("116a86086ae142aabb706240c3d7998e".to_string()),
+                owner_type: Some("user".to_string()),
+                size_bytes: Some(259_923),
+                status: Some("completed".to_string()),
+                storage_backend: Some("s3".to_string()),
+                storage_path: Some(
+                    "s3://dev-singlebasestorage/c2c7d316d6414da080625744152344e4/9943b6fc1f8e44a182a2db32bb93efea.jpg"
+                        .to_string(),
+                ),
+                commit: Some(false),
+                ..Default::default()
+            },
+        };
+        let file_response = crate::service::dispatcher::dispatch(&state, db_path, file_request)
+            .await
+            .expect("file_create must return through the committed coordinator");
+        let file_item = file_response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("item"))
+            .expect("created file item");
+        assert_eq!(
+            file_item.get("id").and_then(Value::as_str),
+            Some("9943b6fc1f8e44a182a2db32bb93efea")
+        );
+        assert_eq!(
+            file_item.get("storage_backend").and_then(Value::as_str),
+            Some("s3")
+        );
+
+        let file_query_request = GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "file_query".to_string(),
+            namespace: None,
+            payload: OperationPayload {
+                owner_id: Some("116a86086ae142aabb706240c3d7998e".to_string()),
+                ..Default::default()
+            },
+        };
+        let file_query_response =
+            crate::service::dispatcher::dispatch(&state, db_path, file_query_request)
+                .await
+                .expect("file_query must decode JSONB metadata without closing the request");
+        let queried_file = file_query_response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("items"))
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .expect("queried file item");
+        assert_eq!(
+            queried_file.get("id").and_then(Value::as_str),
+            Some("9943b6fc1f8e44a182a2db32bb93efea")
         );
     }
 }

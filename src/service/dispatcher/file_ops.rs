@@ -2,6 +2,7 @@
 
 async fn file_create(
     state: &AppState,
+    db_path: &str,
     conn: &libsql::Connection,
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
@@ -55,6 +56,14 @@ async fn file_create(
     )
     .await
     .map_err(|e| AppError::BadRequest(format!("file_create failed: {e}")))?;
+    state
+        .db_manager
+        .append_wal_record(
+            db_path,
+            "FILE_CREATE",
+            &json!({"id": file_id}).to_string(),
+        )
+        .await?;
     let item = fetch_file(conn, &file_id).await?;
     Ok(GatewayResponse::ok(Some(json!({"item": item}))))
 }
@@ -156,6 +165,7 @@ async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
 
 async fn file_update(
     state: &AppState,
+    db_path: &str,
     conn: &libsql::Connection,
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
@@ -223,11 +233,24 @@ async fn file_update(
     if changed == 0 {
         return Err(AppError::BadRequest("file not found".to_string()));
     }
+    state
+        .db_manager
+        .append_wal_record(
+            db_path,
+            "FILE_UPDATE",
+            &json!({"id": file_id}).to_string(),
+        )
+        .await?;
     let item = fetch_file(conn, &file_id).await?;
     Ok(GatewayResponse::ok(Some(json!({"item": item}))))
 }
 
-async fn file_delete(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
+async fn file_delete(
+    state: &AppState,
+    db_path: &str,
+    conn: &libsql::Connection,
+    req: GatewayRequest,
+) -> AppResult<GatewayResponse> {
     let payload = req.payload;
     let file_id = required_text(payload.id, "id")?;
     let purge = payload.purge.unwrap_or(false);
@@ -245,6 +268,16 @@ async fn file_delete(conn: &libsql::Connection, req: GatewayRequest) -> AppResul
         .await
         .map_err(|e| AppError::Internal(format!("file_delete failed: {e}")))?
     };
+    if changed > 0 {
+        state
+            .db_manager
+            .append_wal_record(
+                db_path,
+                "FILE_DELETE",
+                &json!({"id": file_id, "purge": purge}).to_string(),
+            )
+            .await?;
+    }
     Ok(GatewayResponse::ok(Some(json!({
         "id": file_id,
         "deleted": changed > 0,
@@ -294,7 +327,7 @@ async fn file_count(conn: &libsql::Connection, where_clause: &str, binds: Vec<li
 
 fn file_select() -> &'static str {
     "id, bucket, storage_backend, storage_path, filename, content_type, size_bytes, sha256, status,
-     owner_type, owner_id, metadata, uploaded_at, created_at, updated_at, deleted_at, expires_at"
+     owner_type, owner_id, json(metadata), uploaded_at, created_at, updated_at, deleted_at, expires_at"
 }
 
 fn file_from_row(row: &libsql::Row) -> AppResult<Value> {
