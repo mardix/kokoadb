@@ -213,6 +213,13 @@ async fn user_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
         clauses.push("username = ?".to_string());
         binds.push(libsql::Value::Text(username));
     }
+    if let Some(email_verified) = payload.email_verified {
+        clauses.push(if email_verified {
+            "email_verified_at IS NOT NULL".to_string()
+        } else {
+            "email_verified_at IS NULL".to_string()
+        });
+    }
     if let Some(q) = clean_optional(payload.search) {
         clauses.push("(email LIKE ? OR username LIKE ? OR phone LIKE ? OR first_name LIKE ? OR last_name LIKE ? OR id LIKE ?)".to_string());
         let like = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));

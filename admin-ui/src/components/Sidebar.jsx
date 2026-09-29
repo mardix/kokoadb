@@ -1,23 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useAdmin } from '../context/AdminContext.jsx';
+import { KokoaIcon } from './KokoaIcon.jsx';
 
 const databaseSections = [
-  { id: 'overview', label: 'Home', short: 'H', description: 'Database home' },
-  { id: 'crud', label: 'Data', short: 'D', description: 'Documents and namespaces' },
-  { id: 'identity', label: 'Identity', short: 'I', description: 'Users and providers' },
-  { id: 'files', label: 'Files', short: 'F', description: 'File metadata' },
-  { id: 'fts', label: 'Search', short: 'Se', description: 'Full-text search' },
-  { id: 'sqlite', label: 'SQL', short: 'S', description: 'Tables and SQL' },
-  { id: 'metrics', label: 'Metrics', short: 'M', description: 'Metric events' },
-  { id: 'query', label: 'Query', short: 'Q', description: 'Raw gateway requests' },
-  { id: 'stats', label: 'Stats', short: 'T', description: 'Database activity' },
-  { id: 'admin', label: 'Admin', short: 'A', description: 'Database operations' }
+  { id: 'overview', label: 'Home', icon: 'overview', description: 'Database home' },
+  { id: 'crud', label: 'Data', icon: 'data', description: 'Documents and namespaces' },
+  { id: 'identity', label: 'Identity', icon: 'identity', description: 'Users and providers' },
+  { id: 'files', label: 'Files', icon: 'files', description: 'File metadata' },
+  { id: 'sqlite', label: 'SQL', icon: 'sql', description: 'Tables and SQL' },
+  { id: 'metrics', label: 'Metrics', icon: 'metrics', description: 'Metric events' },
+  { id: 'query', label: 'Query', icon: 'query', description: 'Raw gateway requests' },
+  { id: 'stats', label: 'Stats', icon: 'stats', description: 'Database activity' },
+  { id: 'admin', label: 'Admin', icon: 'admin', description: 'Database operations' }
 ];
 
 const instanceSections = [
-  { id: 'admin', label: 'System Admin', description: 'Instance operations and inventory' },
-  { id: 'metrics', label: 'System Metrics', description: 'Instance traffic, memory, and queues' },
-  { id: 'settings', label: 'Connection', description: 'Manage the active connection' }
+  { id: 'admin', label: 'System Admin', icon: 'admin', description: 'Instance operations and inventory' },
+  { id: 'metrics', label: 'System Metrics', icon: 'stats', description: 'Instance traffic, memory, and queues' },
+  { id: 'settings', label: 'Connection', icon: 'connection', description: 'Manage the active connection' }
 ];
 
 export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed }) {
@@ -45,20 +45,20 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
         <nav className="flex flex-1 flex-col items-center gap-1.5 overflow-y-auto p-2.5">
           {stage === 'primary' ? (
             <>
-              <CompactButton label="Home" text="H" active={page === 'home'} onClick={() => setPage('home')} />
+              <CompactButton label="Home" icon="home" active={page === 'home'} onClick={() => setPage('home')} />
               {page !== 'home' ? instanceSections.map((item) => (
-                <CompactButton key={item.id} label={item.label} text={item.id === 'admin' ? 'A' : item.id === 'metrics' ? 'M' : 'C'} active={page === item.id} onClick={() => setPage(item.id)} />
+                <CompactButton key={item.id} label={item.label} icon={item.icon} active={page === item.id} onClick={() => setPage(item.id)} />
               )) : null}
-              {page !== 'home' && lastDb ? <CompactButton label="Return to Database" text="D" onClick={() => openLastDatabase(lastDb)} /> : null}
+              {page !== 'home' && lastDb ? <CompactButton label="Return to Database" icon="database" onClick={() => openLastDatabase(lastDb)} /> : null}
             </>
           ) : null}
           {stage === 'host' ? (
-            <CompactButton label="Databases" text="D" active onClick={() => setPage('crud')} />
+            <CompactButton label="Databases" icon="database" active onClick={() => setPage('crud')} />
           ) : null}
           {stage === 'database' ? (
             <>
               {databaseSections.map((item) => (
-                <CompactButton key={item.id} label={item.label} text={item.short} active={route.tab === item.id} onClick={() => openDbSection(route.db, item.id)} />
+                <CompactButton key={item.id} label={item.label} icon={item.icon} active={route.tab === item.id} onClick={() => openDbSection(route.db, item.id)} />
               ))}
             </>
           ) : null}
@@ -67,11 +67,11 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
           {stage === 'database' ? (
             <div className="flex flex-col items-center gap-2 border-b border-white/10 pb-3">
               {instanceSections.map((item) => (
-                <CompactButton key={item.id} label={item.label} text={item.id === 'admin' ? 'A' : item.id === 'metrics' ? 'M' : 'C'} onClick={() => setPage(item.id)} />
+                <CompactButton key={item.id} label={item.label} icon={item.icon} onClick={() => setPage(item.id)} />
               ))}
             </div>
           ) : null}
-          <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-slate-400 hover:text-cocoa-light" title="Open KokoaDB Docs">Docs</a>
+          <a href={`${origin}/doc`} target="_blank" rel="noreferrer" className="text-[10px] font-semibold text-slate-400 hover:text-sky-300" title="Open KokoaDB Docs">Docs</a>
           <span className="font-mono text-[9px] text-slate-500" title={`KokoaDB ${formatVersion(serviceInfo?.version)}`}>{compactVersion(serviceInfo?.version)}</span>
           <div className={`h-2.5 w-2.5 rounded-full ${statusDot(status.tone)}`} title={status.text} />
         </div>
@@ -86,8 +86,8 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
           <button type="button" onClick={() => setPage('home')} className="flex min-w-0 items-center gap-2 text-left" aria-label="Open KokoaDB Home">
             <img src="./brand/kokoadb-mark.svg" alt="" className="h-8 w-8 shrink-0 rounded-md" aria-hidden="true" />
             <span className="min-w-0">
-              <span className="block truncate text-base font-bold tracking-tight text-white">Kokoa<span className="text-cocoa-light">DB</span></span>
-              <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-[0.14em] text-slate-400">Admin Console</span>
+              <span className="block truncate text-base font-bold tracking-wide text-white">KOKOA<span className="text-cocoa">DB</span></span>
+              <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-[0.14em] text-slate-400">Console</span>
             </span>
           </button>
           <button type="button" onClick={onToggleCollapsed} className="rounded-md border border-white/10 px-1.5 py-1 text-xs font-medium text-slate-400 transition hover:bg-white/10 hover:text-white" title="Collapse Sidebar" aria-label="Collapse Sidebar">←</button>
@@ -109,14 +109,14 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
         {stage === 'primary' ? (
           <div className="space-y-2">
             <div className="sidebar-section">Start</div>
-            <SidebarItem title="Home" description="Welcome to KokoaDB" active={page === 'home'} onClick={() => setPage('home')} />
+            <SidebarItem icon="home" title="Home" description="Welcome to KokoaDB" active={page === 'home'} onClick={() => setPage('home')} />
             {page !== 'home' ? (
               <>
                 <div className="sidebar-section mt-5">Instance</div>
                 {instanceSections.map((item) => (
-                  <SidebarItem key={item.id} compact title={item.label} description={item.description} active={page === item.id} onClick={() => setPage(item.id)} />
+                  <SidebarItem key={item.id} compact icon={item.icon} title={item.label} description={item.description} active={page === item.id} onClick={() => setPage(item.id)} />
                 ))}
-                {lastDb ? <SidebarItem compact title="Return to Database" description={`Open ${lastDb}`} onClick={() => openLastDatabase(lastDb)} /> : null}
+                {lastDb ? <SidebarItem compact icon="database" title="Return to Database" description={`Open ${lastDb}`} onClick={() => openLastDatabase(lastDb)} /> : null}
               </>
             ) : null}
           </div>
@@ -125,7 +125,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
         {stage === 'host' ? (
           <div className="space-y-2">
             <div className="sidebar-section">Host</div>
-            <SidebarItem title="Databases" description="Browse and select a database" active onClick={() => setPage('crud')} />
+            <SidebarItem icon="database" title="Databases" description="Browse and select a database" active onClick={() => setPage('crud')} />
           </div>
         ) : null}
 
@@ -133,7 +133,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
           <div className="space-y-1">
             <div className="sidebar-section mb-1">Database Workspace</div>
             {databaseSections.map((item) => (
-              <SidebarItem compact key={item.id} title={item.label} description={item.description} active={route.tab === item.id} onClick={() => openDbSection(route.db, item.id)} />
+              <SidebarItem compact key={item.id} icon={item.icon} title={item.label} description={item.description} active={route.tab === item.id} onClick={() => openDbSection(route.db, item.id)} />
             ))}
           </div>
         ) : null}
@@ -144,7 +144,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
           <div className="sidebar-footer-group">
             <div className="sidebar-section mb-1">Instance</div>
             {instanceSections.map((item) => (
-              <SidebarItem key={item.id} compact title={item.label} description={item.description} active={page === item.id} onClick={() => setPage(item.id)} />
+              <SidebarItem key={item.id} compact icon={item.icon} title={item.label} description={item.description} active={page === item.id} onClick={() => setPage(item.id)} />
             ))}
           </div>
         ) : null}
@@ -159,7 +159,7 @@ export function Sidebar({ page, setPage, collapsed = false, onToggleCollapsed })
   );
 }
 
-function SidebarItem({ title, description, active = false, compact = false, onClick }) {
+function SidebarItem({ icon, title, description, active = false, compact = false, onClick }) {
   return (
     <button
       type="button"
@@ -168,14 +168,19 @@ function SidebarItem({ title, description, active = false, compact = false, onCl
       title={compact ? description : undefined}
       aria-label={compact ? `${title}: ${description}` : undefined}
     >
-      <div className={compact ? 'text-xs font-medium leading-4' : 'text-[13px] font-medium leading-4'}>{title}</div>
-      {!compact ? <div className="mt-0.5 text-[11px] leading-4 text-slate-500">{description}</div> : null}
+      <div className="flex items-center gap-2">
+        {icon ? <KokoaIcon name={icon} className="h-4 w-4 shrink-0" /> : null}
+        <div className="min-w-0">
+          <div className={compact ? 'truncate text-xs font-medium leading-4' : 'truncate text-[13px] font-medium leading-4'}>{title}</div>
+          {!compact ? <div className="mt-0.5 truncate text-[11px] leading-4 text-slate-500">{description}</div> : null}
+        </div>
+      </div>
     </button>
   );
 }
 
-function CompactButton({ label, text, active = false, onClick }) {
-  return <button type="button" onClick={onClick} className={`flex h-9 w-9 items-center justify-center rounded-md text-[11px] font-medium transition ${active ? 'bg-primary-action text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`} title={label} aria-label={label}>{text}</button>;
+function CompactButton({ label, icon, active = false, onClick }) {
+  return <button type="button" onClick={onClick} className={`flex h-9 w-9 items-center justify-center rounded-md text-[11px] font-medium transition ${active ? 'bg-primary-action text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'}`} title={label} aria-label={label}><KokoaIcon name={icon} className="h-4 w-4" /></button>;
 }
 
 function goBack(stage, folder = '') {

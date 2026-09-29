@@ -63,7 +63,7 @@ export function JsonEditor({ value, onChange, minHeight = '320px', readOnly = fa
       onKeyDown={onKeyDown}
       readOnly={readOnly}
       spellCheck="false"
-      className={`w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none ring-0 transition focus:border-cocoa-light focus:ring-2 focus:ring-primary/25 ${readOnly ? 'cursor-default opacity-95' : ''}`}
+      className={`w-full resize-y rounded-lg border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-100 outline-none ring-0 transition focus:border-primary focus:ring-2 focus:ring-primary/25 ${readOnly ? 'cursor-default opacity-95' : ''}`}
       style={{ minHeight }}
     />
   );

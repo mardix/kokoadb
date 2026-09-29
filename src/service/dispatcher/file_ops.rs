@@ -78,14 +78,19 @@ async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
     let payload = req.payload;
     let (limit, offset, page) = resolve_pagination_args(&payload, 25)?;
     let limit = limit.clamp(1, 200);
-    let mut clauses = vec!["deleted_at IS NULL".to_string(), "lower(status) <> 'deleted'".to_string()];
+    let requested_status = clean_optional(payload.status);
+    let mut clauses = if requested_status.as_deref() == Some("deleted") {
+        vec!["(deleted_at IS NOT NULL OR lower(status) = 'deleted')".to_string()]
+    } else {
+        vec!["deleted_at IS NULL".to_string(), "lower(status) <> 'deleted'".to_string()]
+    };
     let mut binds = Vec::<libsql::Value>::new();
 
     if let Some(bucket) = clean_optional(payload.bucket) {
         clauses.push("bucket = ?".to_string());
         binds.push(libsql::Value::Text(bucket));
     }
-    if let Some(status) = clean_optional(payload.status) {
+    if let Some(status) = requested_status {
         clauses.push("status = ?".to_string());
         binds.push(libsql::Value::Text(status));
     }
@@ -104,6 +109,28 @@ async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
     if let Some(content_type) = clean_optional(payload.content_type) {
         clauses.push("content_type = ?".to_string());
         binds.push(libsql::Value::Text(content_type));
+    }
+    if let Some(category) = clean_optional(payload.file_category) {
+        match category.to_ascii_lowercase().as_str() {
+            "images" => clauses.push("lower(COALESCE(content_type, '')) LIKE 'image/%'".to_string()),
+            "documents" => clauses.push(
+                "(lower(COALESCE(content_type, '')) LIKE 'text/%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%pdf%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%document%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%word%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%spreadsheet%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%excel%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%json%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%xml%' OR \
+                  lower(COALESCE(content_type, '')) LIKE '%csv%')"
+                    .to_string(),
+            ),
+            _ => {
+                return Err(AppError::BadRequest(
+                    "file_category must be images or documents".to_string(),
+                ));
+            }
+        }
     }
     if let Some(search) = clean_optional(payload.search) {
         clauses.push("(id LIKE ? OR filename LIKE ? OR storage_path LIKE ? OR owner_id LIKE ?)".to_string());

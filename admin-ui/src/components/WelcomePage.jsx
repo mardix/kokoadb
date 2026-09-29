@@ -4,6 +4,15 @@ import { useAdmin } from '../context/AdminContext.jsx';
 export function WelcomePage({ setPage }) {
   const { connections, activeConnectionId, switchConnection, clearLocalData } = useAdmin();
   const [connectingId, setConnectingId] = useState('');
+  const [connectionSearch, setConnectionSearch] = useState('');
+  const normalizedSearch = connectionSearch.trim().toLowerCase();
+  const visibleConnections = normalizedSearch
+    ? connections.filter((connection) => {
+      const name = String(connection.settings?.name || 'Connection').toLowerCase();
+      const endpoint = connectionEndpoint(connection.settings).toLowerCase();
+      return name.includes(normalizedSearch) || endpoint.includes(normalizedSearch);
+    })
+    : connections;
 
   async function connect(id) {
     setConnectingId(id);
@@ -19,118 +28,100 @@ export function WelcomePage({ setPage }) {
 
   return (
     <section className="space-y-5">
-      <section className="overflow-hidden rounded-md border border-slate-300 bg-white">
-        <div className="grid lg:grid-cols-2">
-          <div className="flex min-h-[390px] flex-col justify-center p-7 lg:p-10 xl:p-12">
-            <div className="text-xs font-bold uppercase tracking-[0.2em] text-primary">Hybrid Database Toolkit</div>
-            <img src="./brand/kokoadb-logo.svg" alt="KokoaDB" className="mt-5 h-auto w-full max-w-[320px]" />
-            <h1 className="mt-5 text-4xl font-bold tracking-tight text-slate-900">Admin Console</h1>
-            <p className="mt-5 max-w-2xl text-lg font-medium leading-8 text-slate-700">
-              The admin interface for documents, identities, files, metrics, search, and SQL, built into KokoaDB.
-              </p>
-            <p className="mt-6 max-w-2xl text-sm leading-6 text-slate-600">
-              Start by choosing a saved connection. KokoaDB will verify the host, then show the databases available on that instance.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-2">
-              <button type="button" onClick={() => setPage('settings')} className="btn-primary">
-                {connections.length ? 'Manage Connections' : 'Set Up Connection'}
-              </button>
-            </div>
-          </div>
-
-          <div className="flex min-h-[390px] items-center border-t border-slate-300 bg-slate-50/70 p-7 lg:border-l lg:border-t-0 lg:p-10 xl:p-12">
-            <div className="w-full">
-              <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-600">How It Works</div>
-              <div className="mt-5">
-                <WelcomeStep number="01" title="Connect" description="Choose a KokoaDB host and verify access." />
-                <WelcomeStep number="02" title="Select a database" description="Browse the host inventory without opening every DB." />
-                <WelcomeStep number="03" title="Work" description="Open the database tools you need from one workspace." />
-              </div>
-            </div>
-          </div>
+      <header className="flex flex-col gap-5 border-b border-slate-300 pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <img src="./brand/kokoadb-wordmark.svg" alt="KOKOADB" className="h-auto w-full max-w-[230px]" />
+          <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">One Database Platform</p>
         </div>
-      </section>
+        <button type="button" onClick={() => setPage('settings')} className="btn-primary self-start sm:self-auto">
+          {connections.length ? 'Add Connection' : 'Set Up Connection'}
+        </button>
+      </header>
 
-      <section className="panel">
-        <div className="panel-header-row">
-          <div className="flex min-w-0 items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 font-mono text-sm font-black text-slate-700" aria-hidden="true">
-              {connections.length}
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-950">Saved Connections</h2>
-              <p className="mt-1 text-sm font-medium text-slate-600">Private to this browser. Select a host to open its database inventory.</p>
-            </div>
-          </div>
-          <button type="button" onClick={() => setPage('settings')} className="btn-secondary">Add Connection</button>
+      <section className="panel overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-slate-300 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <label className="block w-full max-w-md">
+            <span className="sr-only">Search Saved Connections</span>
+            <input
+              value={connectionSearch}
+              onChange={(event) => setConnectionSearch(event.target.value)}
+              className="field-input"
+              placeholder="Search saved connections"
+            />
+          </label>
+          <span className="text-xs font-medium text-slate-500">
+            {visibleConnections.length} of {connections.length} saved host{connections.length === 1 ? '' : 's'}
+          </span>
         </div>
 
-        {connections.length ? (
+        <div className="hidden grid-cols-[minmax(180px,1fr)_minmax(220px,1.35fr)_90px_110px_64px] gap-4 border-b border-slate-300 bg-slate-50 px-4 py-2.5 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500 md:grid">
+          <span>Connection</span>
+          <span>Endpoint</span>
+          <span>Status</span>
+          <span>Added</span>
+          <span className="text-right">Action</span>
+        </div>
+
+        {visibleConnections.length ? (
           <div className="divide-y divide-slate-200">
-            {connections.map((connection) => {
+            {visibleConnections.map((connection) => {
               const active = connection.id === activeConnectionId;
               const pending = connection.id === connectingId;
               return (
-                <article key={connection.id} className="group grid gap-4 px-5 py-4 transition-colors hover:bg-slate-50/80 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                  <div className="flex min-w-0 items-center gap-4">
-                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border font-mono text-sm font-black ${active ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-600'}`} aria-hidden="true">
+                <article key={connection.id} className={`grid gap-3 px-4 py-3 transition-colors hover:bg-slate-50 md:grid-cols-[minmax(180px,1fr)_minmax(220px,1.35fr)_90px_110px_64px] md:items-center md:gap-4 ${active ? 'bg-slate-50/70' : 'bg-white'}`}>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded font-mono text-xs font-bold ${active ? 'bg-slate-800 text-white' : 'border border-slate-300 bg-white text-slate-600'}`} aria-hidden="true">
                       {connectionInitial(connection.settings)}
-                    </div>
+                    </span>
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="truncate text-base font-bold text-slate-950">{connection.settings.name || 'Connection'}</h3>
-                        {active ? <span className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-700">Current</span> : null}
-                      </div>
-                      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="truncate font-mono text-sm font-semibold text-slate-700" title={connectionEndpoint(connection.settings)}>{connectionEndpoint(connection.settings)}</span>
-                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500">
-                          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" aria-hidden="true" />
-                          Verified before opening
-                        </span>
-                      </div>
+                      <h2 className="truncate text-sm font-semibold text-slate-900">{connection.settings.name || 'Connection'}</h2>
+                      <span className="mt-0.5 block text-[10px] text-slate-500">{active ? 'Active browser connection' : 'Saved connection'}</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 pl-14 md:pl-0">
-                    <button type="button" onClick={() => setPage('settings')} className="btn-secondary">
-                      Manage
-                    </button>
-                    <button type="button" onClick={() => connect(connection.id)} disabled={Boolean(connectingId)} className="btn-primary min-w-28">
-                      {pending ? 'Connecting...' : active ? 'Open' : 'Connect'}
-                    </button>
-                  </div>
+                  <code className="block truncate text-xs text-slate-600" title={connectionEndpoint(connection.settings)}>{connectionEndpoint(connection.settings)}</code>
+                  <span className={`inline-flex w-fit items-center gap-1.5 text-xs font-semibold ${active ? 'text-emerald-700' : 'text-slate-500'}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${active ? 'bg-emerald-600' : 'bg-slate-400'}`} aria-hidden="true" />
+                    {active ? 'Current' : 'Saved'}
+                  </span>
+                  <span className="text-xs text-slate-500">{formatConnectionDate(connection.createdAt)}</span>
+                  <button type="button" onClick={() => connect(connection.id)} disabled={Boolean(connectingId)} className={active ? 'btn-primary' : 'btn-secondary'}>
+                    {pending ? 'Opening...' : active ? 'Open' : 'Connect'}
+                  </button>
                 </article>
               );
             })}
           </div>
         ) : (
-          <div className="grid gap-5 p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div className="flex flex-col items-start justify-between gap-4 p-6 sm:flex-row sm:items-center">
             <div>
-              <h3 className="text-lg font-semibold text-slate-950">Add your first KokoaDB connection</h3>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">You will need the full endpoint, such as <span className="font-mono text-slate-700">http://localhost:6543/_/kdb</span>, plus an access key if the server requires one.</p>
+              <h2 className="text-sm font-semibold text-slate-900">{connections.length ? 'No connections match that search' : 'Add your first KOKOADB connection'}</h2>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                {connections.length ? 'Try another host name or endpoint.' : 'Enter the full KOKOADB endpoint and an access key when required.'}
+              </p>
             </div>
-            <button type="button" onClick={() => setPage('settings')} className="btn-primary">Enter Connection Settings</button>
+            <button type="button" onClick={() => setPage('settings')} className="btn-primary">{connections.length ? 'Manage Connections' : 'Enter Connection Settings'}</button>
           </div>
         )}
       </section>
 
-      <section className="panel">
-        <div className="panel-header-row">
-          <div>
-            <h2 className="text-base font-semibold text-slate-950">Console Tools</h2>
-            <p className="mt-1 text-sm text-slate-500">Open instance-level views or manage browser-local console settings.</p>
-          </div>
+      <section>
+        <div className="mb-3">
+          <h2 className="text-base font-semibold text-slate-950">Instance Tools</h2>
+          <p className="mt-1 text-xs text-slate-500">Inspect the active instance or manage browser-local console settings.</p>
         </div>
-        <div className="grid border-b border-slate-200 md:grid-cols-3">
-          <HomeTool title="Connections" description="Add, edit, test, and switch saved KokoaDB hosts." action="Manage Connections" onClick={() => setPage('settings')} />
-          <HomeTool title="System Metrics" description="Inspect this instance's uptime, traffic, memory, and background queues." action="View Metrics" onClick={() => setPage('metrics')} />
-          <HomeTool title="System Admin" description="Access instance tools, database inventory, and the system catalog." action="Open Admin" onClick={() => setPage('admin')} />
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-50/70 px-5 py-4">
-          <div>
-            <div className="text-base font-bold text-slate-950">Clear Local Console Data</div>
-            <div className="mt-1 text-sm font-medium text-slate-600">Immediately removes saved connections, cached inventories, request history, and UI preferences from this browser.</div>
+        <div className="panel overflow-hidden">
+          <div className="grid md:grid-cols-3">
+            <HomeTool title="Connections" description="Add, edit, test, and switch saved KOKOADB hosts." action="Manage Connections" onClick={() => setPage('settings')} />
+            <HomeTool title="System Metrics" description="Inspect this instance's uptime, traffic, memory, and background queues." action="View Metrics" onClick={() => setPage('metrics')} />
+            <HomeTool title="System Admin" description="Access instance tools, database inventory, and the system catalog." action="Open Admin" onClick={() => setPage('admin')} />
           </div>
-          <button type="button" onClick={wipeLocalData} className="rounded-md border border-rose-300 bg-white px-3 py-2 text-sm font-bold text-rose-700 transition hover:bg-rose-50">Clear Local Data</button>
+          <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 bg-slate-50/70 px-5 py-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-950">Clear Local Console Data</div>
+              <div className="mt-1 text-xs text-slate-500">Remove saved connections, cached inventories, request history, and UI preferences from this browser.</div>
+            </div>
+            <button type="button" onClick={wipeLocalData} className="btn-danger">Clear Local Data</button>
+          </div>
         </div>
       </section>
     </section>
@@ -139,23 +130,11 @@ export function WelcomePage({ setPage }) {
 
 function HomeTool({ title, description, action, onClick }) {
   return (
-    <article className="flex min-h-44 flex-col border-b border-slate-200 p-5 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0">
-      <h3 className="text-base font-bold text-slate-950">{title}</h3>
-      <p className="mt-3 flex-1 text-sm font-medium leading-6 text-slate-600">{description}</p>
-      <button type="button" onClick={onClick} className="mt-5 self-start text-sm font-bold text-primary hover:underline">{action} <span aria-hidden="true">→</span></button>
+    <article className="flex min-h-36 flex-col border-b border-slate-200 p-5 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0">
+      <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
+      <p className="mt-2 flex-1 text-xs leading-5 text-slate-500">{description}</p>
+      <button type="button" onClick={onClick} className="mt-4 self-start text-xs font-semibold text-primary hover:underline">{action} <span aria-hidden="true">→</span></button>
     </article>
-  );
-}
-
-function WelcomeStep({ number, title, description }) {
-  return (
-    <div className="grid grid-cols-[56px_minmax(0,1fr)] gap-4 border-b border-slate-300 py-5 first:pt-2 last:border-b-0 last:pb-0">
-      <div className="font-mono text-sm font-bold text-primary">{number}</div>
-      <div>
-        <h3 className="text-base font-bold text-slate-950">{title}</h3>
-        <p className="mt-1 text-sm font-medium leading-6 text-slate-600">{description}</p>
-      </div>
-    </div>
   );
 }
 
@@ -174,4 +153,11 @@ function connectionInitial(settings) {
   } catch {
     return 'K';
   }
+}
+
+function formatConnectionDate(value) {
+  if (!value) return 'Unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown';
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(date);
 }

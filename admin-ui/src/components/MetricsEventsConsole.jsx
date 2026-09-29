@@ -6,9 +6,10 @@ import { Field } from './SettingsPanel.jsx';
 import { JsonEditor, formatJsonText } from './JsonEditor.jsx';
 import { PageHeader } from './Layout.jsx';
 import { ResponsePanel } from './ResponsePanel.jsx';
+import { DataBrowserFrame, DataBrowserTabs } from './DataBrowserFrame.jsx';
 
 const modes = [
-  { id: 'query', label: 'Query' },
+  { id: 'query', label: 'Data' },
   { id: 'ingest', label: 'Ingest' },
   { id: 'raw', label: 'Raw' }
 ];
@@ -224,7 +225,8 @@ export function MetricsEventsPanel({ embedded = false, db }) {
           onCopy={() => copyRequest(buildQueryRequest())}
           onPreview={buildQueryRequest}
           onRun={() => runRequest(buildQueryRequest())}
-          onRequestPreview={setQueryPreview}
+          response={response}
+          responseDurationMs={responseDurationMs}
         />
       ) : null}
 
@@ -250,7 +252,7 @@ export function MetricsEventsPanel({ embedded = false, db }) {
         />
       ) : null}
 
-      <ResponsePanel title="Metrics Response" data={response} metrics durationMs={responseDurationMs} />
+      {mode !== 'query' ? <ResponsePanel title="Metrics Response" data={response} metrics durationMs={responseDurationMs} /> : null}
     </section>
   );
 }
@@ -271,17 +273,13 @@ function MetricsQueryMode({
   onCopy,
   onPreview,
   onRun,
-  onRequestPreview
+  response,
+  responseDurationMs
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [metricsRawOpen, setMetricsRawOpen] = useState(false);
   const [filterRawOpen, setFilterRawOpen] = useState(false);
   const [groupInput, setGroupInput] = useState('');
-
-  function previewRequest() {
-    onPreview();
-    setPreviewOpen(true);
-  }
 
   function commitGroupInput() {
     const value = groupInput.trim();
@@ -295,124 +293,281 @@ function MetricsQueryMode({
   }
 
   return (
-    <>
-      <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        <MetricsCatalogPanel
-          events={catalogEvents}
-          dimensions={catalogDimensions}
-          selectedEvent={form.event}
-          loading={catalogLoading}
-          error={catalogError}
-          onSelectEvent={onSelectEvent}
-          onAddGroup={onAddGroup}
-          onAddMetric={onAddMetric}
-          onRefresh={onRefreshCatalog}
-        />
-
-        <section className="panel">
-          <div className="panel-header-row">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-950">Query Builder</h3>
-              <p className="text-xs text-slate-500">Pick an event, choose a range, then add groups or metrics from discovered dimensions.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={onRun} className="btn-primary">Run Query</button>
-            </div>
-          </div>
-          <div className="space-y-4 p-4">
-            <div className="grid gap-4 lg:grid-cols-[1fr_2fr]">
-              <Field label="Event" value={form.event} onChange={(v) => onChange('event', v)} placeholder="api.request" />
-              <TimeWindowControls form={form} onChange={onChange} />
-
-              <div className="lg:col-span-2">
-                <div className="mb-3 flex gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 ">
-                  <div className="min-w-0">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Range</div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {quickRanges.map((range) => (
-                        <button key={range} type="button" onClick={() => onQuickRange(range)} className={`btn-chip ${form.rangeMode !== 'custom' && form.range === range ? 'btn-chip-active' : ''}`}>
-                          {range}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="min-w-0">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Interval</div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {quickIntervals.map((interval) => (
-                        <button key={interval} type="button" onClick={() => onChange('interval', interval)} className={`btn-chip ${form.interval === interval ? 'btn-chip-active' : ''}`}>
-                          By {titleFromAlias(interval)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-                <GroupByBuilder
-                  groups={csvValues(form.groups)}
-                  value={groupInput}
-                  onInput={setGroupInput}
-                  onCommit={commitGroupInput}
-                  onRemove={removeGroup}
-                />
-                <p className="mt-2 text-xs text-slate-500">Tip: click a dimension in the catalog, or type a path and press Enter.</p>
+    <DataBrowserFrame
+      label="Metric Events"
+      items={[
+        { id: '__all', label: 'All Metrics', count: catalogEvents.length, icon: '◫' },
+        ...catalogEvents.map((eventName) => ({ id: eventName, label: eventName, icon: '∿' }))
+      ]}
+      selected={form.event || '__all'}
+      onSelect={(eventName) => onSelectEvent(eventName === '__all' ? '' : eventName)}
+      searchPlaceholder="Filter event types..."
+      emptyMessage="No metric events discovered yet."
+    >
+      <div className="metrics-data-grid h-full overflow-auto">
+        <div className="min-w-0 space-y-3">
+          <section className="panel metrics-explorer-summary">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="truncate text-base font-semibold text-slate-950">{form.event || 'All Metrics'}</h3>
+                <span className="badge badge-info">{form.rangeMode === 'custom' ? 'Custom Range' : form.range}</span>
+                <span className="badge badge-muted">By {titleFromAlias(form.interval || 'none')}</span>
               </div>
+              <p className="mt-1 text-xs text-slate-500">Explore the current event and refine its query from the inspector.</p>
             </div>
+            <button type="button" onClick={onRun} disabled={!form.event} className="btn-primary shrink-0">Run Query</button>
+          </section>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              <MetricsBuilderPanel
-                value={form.metrics}
-                rawOpen={metricsRawOpen}
-                onRawOpen={setMetricsRawOpen}
-                onChange={(v) => onChange('metrics', v)}
-              />
-              <FilterBuilderPanel
-                value={form.filter}
-                rawOpen={filterRawOpen}
-                onRawOpen={setFilterRawOpen}
-                onChange={(v) => onChange('filter', v)}
-              />
-            </div>
-          </div>
-        </section>
+          {!form.event ? (
+            <MetricsCatalogTable events={catalogEvents} loading={catalogLoading} error={catalogError} onSelect={onSelectEvent} onRefresh={onRefreshCatalog} />
+          ) : response ? (
+            <ResponsePanel title="Metrics Results" data={response} metrics durationMs={responseDurationMs} />
+          ) : (
+            <section className="panel metrics-empty-results">
+              <div className="max-w-lg text-center">
+                <h3 className="text-base font-semibold text-slate-900">{form.event ? 'Explore this event' : 'Select a metric event'}</h3>
+                <p className="mt-2 text-sm text-slate-500">Choose an event from the left, configure metrics and filters, then run the query to populate the table.</p>
+                {form.event ? <button type="button" onClick={onRun} className="btn-primary mt-4">Run Query</button> : null}
+              </div>
+            </section>
+          )}
+        </div>
+
+        <MetricsQueryInspector
+          form={form}
+          requestPreview={requestPreview}
+          previewOpen={previewOpen}
+          metricsRawOpen={metricsRawOpen}
+          filterRawOpen={filterRawOpen}
+          groupInput={groupInput}
+          onChange={onChange}
+          onQuickRange={onQuickRange}
+          onPreview={() => {
+            if (!onPreview()) return;
+            setPreviewOpen((value) => !value);
+          }}
+          onCopy={onCopy}
+          onRun={onRun}
+          onMetricsRawOpen={setMetricsRawOpen}
+          onFilterRawOpen={setFilterRawOpen}
+          onGroupInput={setGroupInput}
+          onGroupCommit={commitGroupInput}
+          onGroupRemove={removeGroup}
+        />
+      </div>
+    </DataBrowserFrame>
+  );
+}
+
+function MetricsCatalogTable({ events, loading, error, onSelect, onRefresh }) {
+  return (
+    <section className="panel overflow-hidden">
+      <div className="panel-header-row">
+        <div>
+          <h3 className="panel-title">Metric Event Types</h3>
+          <p className="panel-subtitle">Choose an event to inspect its time-series metrics and dimensions.</p>
+        </div>
+        <button type="button" onClick={onRefresh} className="btn-secondary">Refresh</button>
+      </div>
+      {error ? <div className="border-b border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div> : null}
+      <div className="overflow-x-auto">
+        <table className="data-grid min-w-full">
+          <thead>
+            <tr>
+              <th className="data-grid-head w-16">#</th>
+              <th className="data-grid-head">Event Type</th>
+              <th className="data-grid-head w-32 text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.map((eventName, index) => (
+              <tr key={eventName}>
+                <td className="data-grid-cell text-slate-400">{index + 1}</td>
+                <td className="data-grid-cell font-mono font-medium text-slate-900">{eventName}</td>
+                <td className="data-grid-cell text-right"><button type="button" className="btn-label" onClick={() => onSelect(eventName)}>Open</button></td>
+              </tr>
+            ))}
+            {!events.length ? (
+              <tr><td colSpan="3" className="data-grid-cell py-10 text-center text-sm text-slate-500">{loading ? 'Loading metric events...' : 'No metric events discovered yet.'}</td></tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function MetricsQueryInspector({
+  form,
+  requestPreview,
+  previewOpen,
+  metricsRawOpen,
+  filterRawOpen,
+  groupInput,
+  onChange,
+  onQuickRange,
+  onPreview,
+  onCopy,
+  onRun,
+  onMetricsRawOpen,
+  onFilterRawOpen,
+  onGroupInput,
+  onGroupCommit,
+  onGroupRemove
+}) {
+  return (
+    <aside className="panel metrics-query-inspector">
+      <div className="panel-header-row">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">Query Inspector</h3>
+          <p className="text-xs text-slate-500">Configure the active query.</p>
+        </div>
+        <button type="button" onClick={onPreview} className="btn-panel-menu">{previewOpen ? 'Inspector' : 'Request'}</button>
       </div>
 
-      <section className="panel">
-        <button type="button" onClick={() => setPreviewOpen((v) => !v)} className="flex w-full items-center justify-between border-b border-slate-200 px-4 py-3 text-left">
+      {previewOpen ? (
+        <div className="space-y-3 p-3">
           <div>
-            <h3 className="text-sm font-semibold text-slate-950">Request Preview</h3>
-            <p className="text-xs text-slate-500">Generated metrics_query payload. Collapsed by default to keep the builder focused.</p>
+            <div className="field-label">Request Preview</div>
+            <pre className="metrics-request-preview">{requestPreview}</pre>
           </div>
-          <span className="text-xs font-semibold text-slate-500">{previewOpen ? 'Hide' : 'Show'}</span>
-        </button>
-        {previewOpen ? (
-          <>
-            <div className="flex flex-wrap justify-end gap-2 border-b border-slate-100 px-4 py-3">
-              <button type="button" onClick={previewRequest} className="btn-secondary">Refresh Preview</button>
-              <button type="button" onClick={onCopy} className="btn-secondary">Copy Request</button>
-              <button type="button" onClick={onRun} className="btn-primary">Run Query</button>
-            </div>
-            <div className="p-4"><JsonEditor value={requestPreview} onChange={onRequestPreview} minHeight="220px" /></div>
-          </>
-        ) : null}
-      </section>
-    </>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onCopy} className="btn-secondary">Copy Request</button>
+            <button type="button" onClick={onRun} className="btn-primary">Run Query</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <InspectorSection title="Event">
+            <Field label="Event Name" value={form.event} onChange={(value) => onChange('event', value)} placeholder="api.request" />
+          </InspectorSection>
+          <InspectorSection title="Time Window">
+            <CompactTimeControls form={form} onChange={onChange} onQuickRange={onQuickRange} />
+          </InspectorSection>
+          <InspectorSection title="Metrics" action={<button type="button" onClick={() => onMetricsRawOpen(!metricsRawOpen)} className="btn-label">{metricsRawOpen ? 'Wizard' : 'JSON'}</button>}>
+            <CompactMetricsEditor value={form.metrics} rawOpen={metricsRawOpen} onChange={(value) => onChange('metrics', value)} />
+          </InspectorSection>
+          <InspectorSection title="Group By">
+            <GroupByBuilder groups={csvValues(form.groups)} value={groupInput} onInput={onGroupInput} onCommit={onGroupCommit} onRemove={onGroupRemove} />
+          </InspectorSection>
+          <InspectorSection title="Filters" action={<button type="button" onClick={() => onFilterRawOpen(!filterRawOpen)} className="btn-label">{filterRawOpen ? 'Wizard' : 'JSON'}</button>}>
+            <CompactFilterEditor value={form.filter} rawOpen={filterRawOpen} onChange={(value) => onChange('filter', value)} />
+          </InspectorSection>
+          <div className="metrics-inspector-actions"><button type="button" onClick={onRun} className="btn-primary w-full">Apply & Run Query</button></div>
+        </>
+      )}
+    </aside>
+  );
+}
+
+function InspectorSection({ title, action = null, children }) {
+  return (
+    <section className="metrics-inspector-section">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">{title}</h4>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function CompactTimeControls({ form, onChange, onQuickRange }) {
+  const custom = form.rangeMode === 'custom';
+  return (
+    <div className="space-y-3">
+      <label className="block">
+        <span className="field-label">Mode</span>
+        <select value={form.rangeMode || 'preset'} onChange={(event) => onChange('rangeMode', event.target.value)} className="mini-select"><option value="preset">Preset Range</option><option value="custom">Custom Dates</option></select>
+      </label>
+      {custom ? (
+        <div className="space-y-2">
+          <label className="block"><span className="field-label">Start</span><input type="datetime-local" value={form.start || ''} onChange={(event) => onChange('start', event.target.value)} className="mini-input" /></label>
+          <label className="block"><span className="field-label">End</span><input type="datetime-local" value={form.end || ''} onChange={(event) => onChange('end', event.target.value)} className="mini-input" /></label>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">{quickRanges.map((range) => <button key={range} type="button" onClick={() => onQuickRange(range)} className={`btn-label ${form.range === range ? 'btn-chip-secondary' : ''}`}>{range}</button>)}</div>
+      )}
+      <div>
+        <div className="field-label">Interval</div>
+        <div className="flex flex-wrap gap-1.5">{quickIntervals.map((interval) => <button key={interval} type="button" onClick={() => onChange('interval', interval)} className={`btn-label ${form.interval === interval ? 'btn-chip-secondary' : ''}`}>{titleFromAlias(interval)}</button>)}</div>
+      </div>
+    </div>
+  );
+}
+
+function CompactMetricsEditor({ value, rawOpen, onChange }) {
+  const metrics = parseMetrics(value);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ op: 'count', field: '*', alias: 'events', label: 'Events' });
+
+  function addMetric() {
+    const field = draft.field.trim() || '*';
+    const op = draft.op || 'count';
+    const alias = draft.alias.trim() || metricAlias(op, field);
+    onChange(pretty([...metrics, { op, field, alias, label: draft.label.trim() || titleFromAlias(alias) }]));
+    setDraft({ op: 'count', field: '*', alias: 'events', label: 'Events' });
+    setAdding(false);
+  }
+
+  if (rawOpen) return <JsonEditor value={value} onChange={onChange} minHeight="190px" />;
+  return (
+    <div className="space-y-2">
+      {metrics.map((metric, index) => (
+        <div key={`${metric.alias || metric.field}-${index}`} className="metrics-inspector-item">
+          <div className="min-w-0"><div className="truncate text-xs font-semibold text-slate-800">{metric.label || metric.alias || metric.op}</div><div className="truncate text-[11px] text-slate-500">{metric.op} · {metric.field || '*'}</div></div>
+          <button type="button" onClick={() => onChange(pretty(metrics.filter((_, itemIndex) => itemIndex !== index)))} className="metrics-remove-button" aria-label={`Remove ${metric.alias || metric.field || 'metric'}`}>×</button>
+        </div>
+      ))}
+      {adding ? (
+        <div className="metrics-inspector-editor">
+          <label><span className="field-label">Operation</span><select value={draft.op} onChange={(event) => setDraft((previous) => ({ ...previous, op: event.target.value }))} className="mini-select"><option value="count">Count</option><option value="sum">Sum</option><option value="avg">Average</option><option value="min">Minimum</option><option value="max">Maximum</option></select></label>
+          <Field label="Field" value={draft.field} onChange={(field) => setDraft((previous) => ({ ...previous, field }))} placeholder="* or duration_ms" />
+          <Field label="Alias" value={draft.alias} onChange={(alias) => setDraft((previous) => ({ ...previous, alias }))} placeholder="requests" />
+          <Field label="Label" value={draft.label} onChange={(label) => setDraft((previous) => ({ ...previous, label }))} placeholder="Requests" />
+          <div className="flex gap-2"><button type="button" onClick={addMetric} className="btn-primary">Add</button><button type="button" onClick={() => setAdding(false)} className="btn-secondary">Cancel</button></div>
+        </div>
+      ) : <button type="button" onClick={() => setAdding(true)} className="btn-secondary w-full">Add Metric</button>}
+    </div>
+  );
+}
+
+function CompactFilterEditor({ value, rawOpen, onChange }) {
+  const rows = filterRowsFromJson(value);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ field: '', op: '$eq', value: '' });
+
+  function addFilter() {
+    if (!draft.field.trim()) return;
+    onChange(pretty(filterJsonFromRows([...rows, draft])));
+    setDraft({ field: '', op: '$eq', value: '' });
+    setAdding(false);
+  }
+
+  if (rawOpen) return <JsonEditor value={value} onChange={onChange} minHeight="170px" />;
+  return (
+    <div className="space-y-2">
+      {rows.map((row, index) => (
+        <div key={`${row.field}-${index}`} className="metrics-inspector-item">
+          <div className="min-w-0 truncate text-xs text-slate-700"><span className="font-semibold">{row.field}</span> <span className="text-slate-500">{row.op}</span> {row.value}</div>
+          <button type="button" onClick={() => onChange(pretty(filterJsonFromRows(rows.filter((_, itemIndex) => itemIndex !== index))))} className="metrics-remove-button" aria-label={`Remove ${row.field || 'filter'}`}>×</button>
+        </div>
+      ))}
+      {adding ? (
+        <div className="metrics-inspector-editor">
+          <Field label="Field" value={draft.field} onChange={(field) => setDraft((previous) => ({ ...previous, field }))} placeholder="dimensions.status" />
+          <label><span className="field-label">Operator</span><select value={draft.op} onChange={(event) => setDraft((previous) => ({ ...previous, op: event.target.value }))} className="mini-select"><option value="$eq">Equals</option><option value="$ne">Not Equal</option><option value="$gt">Greater Than</option><option value="$gte">At Least</option><option value="$lt">Less Than</option><option value="$lte">At Most</option><option value="$in">In List</option></select></label>
+          <Field label="Value" value={draft.value} onChange={(nextValue) => setDraft((previous) => ({ ...previous, value: nextValue }))} placeholder="200 or [200, 201]" />
+          <div className="flex gap-2"><button type="button" onClick={addFilter} className="btn-primary">Add</button><button type="button" onClick={() => setAdding(false)} className="btn-secondary">Cancel</button></div>
+        </div>
+      ) : <button type="button" onClick={() => setAdding(true)} className="btn-secondary w-full">Add Filter</button>}
+    </div>
   );
 }
 
 function MetricsModeHeader({ mode, onMode }) {
   return (
-    <section className="panel px-4 py-3">
-      <div className="flex flex-wrap items-center gap-3">
-        <h3 className="text-sm font-semibold text-slate-950">Metrics</h3>
-        <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
-          {modes.map((item) => (
-            <button key={item.id} onClick={() => onMode(item.id)} className={`btn-tab ${mode === item.id ? 'btn-tab-active' : 'btn-tab-idle'}`}>
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
-    </section>
+    <DataBrowserTabs label="Metrics" tabs={modes} active={mode} onChange={onMode} />
   );
 }
 
@@ -439,7 +594,7 @@ function GroupByBuilder({ groups, value, onInput, onCommit, onRemove }) {
             }}
             onBlur={onCommit}
             placeholder={groups.length ? 'Add another path...' : 'dimensions.endpoint'}
-            className="min-w-52 flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none"
+            className="min-w-24 flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none"
           />
         </div>
       </div>
@@ -447,160 +602,14 @@ function GroupByBuilder({ groups, value, onInput, onCommit, onRemove }) {
   );
 }
 
-function TimeWindowControls({ form, onChange }) {
-  const mode = form.rangeMode || 'preset';
-  return (
-    <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
-      <label className="block">
-        <span className="field-label">Time Window</span>
-        <select value={mode} onChange={(e) => onChange('rangeMode', e.target.value)} className="field-input">
-          <option value="preset">Preset Range</option>
-          <option value="custom">Custom Dates</option>
-        </select>
-      </label>
-
-      {mode === 'custom' ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="field-label">Start</span>
-            <input
-              type="datetime-local"
-              value={form.start || ''}
-              onChange={(event) => onChange('start', event.target.value)}
-              className="field-input"
-            />
-          </label>
-          <label className="block">
-            <span className="field-label">End</span>
-            <input
-              type="datetime-local"
-              value={form.end || ''}
-              onChange={(event) => onChange('end', event.target.value)}
-              className="field-input"
-            />
-          </label>
-        </div>
-      ) : (
-        <Field label="Range" value={form.range} onChange={(v) => onChange('range', v)} placeholder="24h, today, 7d" />
-      )}
-    </div>
-  );
-}
-
-function MetricsBuilderPanel({ value, rawOpen, onRawOpen, onChange }) {
-  const metrics = parseMetrics(value);
-  const [draft, setDraft] = useState({ op: 'count', field: '*', alias: 'events', label: 'Events' });
-
-  function addMetric() {
-    const field = draft.field.trim() || '*';
-    const op = draft.op || 'count';
-    const alias = draft.alias.trim() || metricAlias(op, field);
-    const next = { op, field, alias, label: draft.label.trim() || titleFromAlias(alias) };
-    onChange(pretty([...metrics, next]));
-    setDraft({ op: 'count', field: '*', alias: 'events', label: 'Events' });
-  }
-
-  function removeMetric(index) {
-    onChange(pretty(metrics.filter((_, itemIndex) => itemIndex !== index)));
-  }
-
-  return (
-    <section className="panel">
-      <div className="panel-header-row">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-950">Metrics</h3>
-          <p className="text-xs text-slate-500">Define the values returned by the metrics query.</p>
-        </div>
-        <button type="button" onClick={() => onRawOpen(!rawOpen)} className="btn-secondary">{rawOpen ? 'Use Wizard' : 'Edit JSON'}</button>
-      </div>
-      {rawOpen ? (
-        <div className="panel-body"><JsonEditor value={value} onChange={onChange} minHeight="250px" /></div>
-      ) : (
-        <div className="space-y-4 p-4">
-          <div className="space-y-2">
-            {metrics.length ? metrics.map((metric, index) => (
-              <div key={`${metric.alias || metric.field}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">{metric.label || metric.alias || metric.op}</div>
-                  <div className="text-xs text-slate-500">{metric.op} on {metric.field || '*'}</div>
-                </div>
-                <button type="button" onClick={() => removeMetric(index)} className="rounded-md px-2 py-1 text-xs font-semibold text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label={`Remove ${metric.alias || metric.field || 'metric'}`}>X</button>
-              </div>
-            )) : <p className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">No metrics yet. Add at least one metric.</p>}
-          </div>
-          <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[120px_1fr_1fr_1fr_auto]">
-            <label className="block">
-              <span className="field-label">Operation</span>
-              <select value={draft.op} onChange={(event) => setDraft((prev) => ({ ...prev, op: event.target.value }))} className="field-input">
-                <option value="count">count</option><option value="sum">sum</option><option value="avg">avg</option><option value="min">min</option><option value="max">max</option>
-              </select>
-            </label>
-            <Field label="Field" value={draft.field} onChange={(field) => setDraft((prev) => ({ ...prev, field }))} placeholder="* or dimensions.duration_ms" />
-            <Field label="Alias" value={draft.alias} onChange={(alias) => setDraft((prev) => ({ ...prev, alias }))} placeholder="requests" />
-            <Field label="Label" value={draft.label} onChange={(label) => setDraft((prev) => ({ ...prev, label }))} placeholder="Requests" />
-            <div className="flex items-end"><button type="button" onClick={addMetric} className="btn-primary w-full">Add</button></div>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function FilterBuilderPanel({ value, rawOpen, onRawOpen, onChange }) {
-  const rows = filterRowsFromJson(value);
-  const [draft, setDraft] = useState({ field: '', op: '$eq', value: '' });
-
-  function addFilter() {
-    if (!draft.field.trim()) return;
-    onChange(pretty(filterJsonFromRows([...rows, draft])));
-    setDraft({ field: '', op: '$eq', value: '' });
-  }
-
-  function removeFilter(index) {
-    onChange(pretty(filterJsonFromRows(rows.filter((_, itemIndex) => itemIndex !== index))));
-  }
-
-  return (
-    <section className="panel">
-      <div className="panel-header-row">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-950">Filter</h3>
-          <p className="text-xs text-slate-500">Limit metric events before aggregation.</p>
-        </div>
-        <button type="button" onClick={() => onRawOpen(!rawOpen)} className="btn-secondary">{rawOpen ? 'Use Wizard' : 'Edit JSON'}</button>
-      </div>
-      {rawOpen ? (
-        <div className="panel-body"><JsonEditor value={value} onChange={onChange} minHeight="250px" /></div>
-      ) : (
-        <div className="space-y-4 p-4">
-          <div className="space-y-2">
-            {rows.length ? rows.map((row, index) => (
-              <div key={`${row.field}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="text-sm text-slate-800"><span className="font-semibold">{row.field}</span> <span className="text-slate-500">{row.op}</span> {row.value}</div>
-                <button type="button" onClick={() => removeFilter(index)} className="rounded-md px-2 py-1 text-xs font-semibold text-slate-400 hover:bg-rose-50 hover:text-rose-600" aria-label={`Remove ${row.field || 'filter'}`}>X</button>
-              </div>
-            )) : <p className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">No filter. The query will include all matching event rows.</p>}
-          </div>
-          <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-[1fr_120px_1fr_auto]">
-            <Field label="Field" value={draft.field} onChange={(field) => setDraft((prev) => ({ ...prev, field }))} placeholder="dimensions.status" />
-            <label className="block">
-              <span className="field-label">Operator</span>
-              <select value={draft.op} onChange={(event) => setDraft((prev) => ({ ...prev, op: event.target.value }))} className="field-input">
-                <option value="$eq">$eq</option><option value="$ne">$ne</option><option value="$gt">$gt</option><option value="$gte">$gte</option><option value="$lt">$lt</option><option value="$lte">$lte</option><option value="$in">$in</option>
-              </select>
-            </label>
-            <Field label="Value" value={draft.value} onChange={(nextValue) => setDraft((prev) => ({ ...prev, value: nextValue }))} placeholder="200 or [200,201]" />
-            <div className="flex items-end"><button type="button" onClick={addFilter} className="btn-primary w-full">Add</button></div>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
 function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error, onSelectEvent, onAddGroup, onAddMetric, onRefresh }) {
+  const [search, setSearch] = useState('');
+  const term = search.trim().toLowerCase();
+  const visibleEvents = term ? events.filter((value) => value.toLowerCase().includes(term)) : events;
+  const visibleDimensions = term ? dimensions.filter((value) => value.toLowerCase().includes(term)) : dimensions;
+
   return (
-    <section className="panel">
+    <section className="panel metrics-catalog-panel">
       <div className="panel-header-row">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">Catalog</h3>
@@ -611,6 +620,10 @@ function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error
 
       <div className="space-y-4 p-4">
         {error ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">{error}</div> : null}
+        <label className="block">
+          <span className="field-label">Search Catalog</span>
+          <input value={search} onChange={(event) => setSearch(event.target.value)} className="mini-input" placeholder="Event or dimension" />
+        </label>
 
         <div>
           <div className="mb-2 flex items-center justify-between">
@@ -618,7 +631,7 @@ function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">{events.length}</span>
           </div>
           <div className="max-h-48 space-y-1 overflow-auto rounded-lg border border-slate-100 bg-slate-50 p-1">
-            {events.length ? events.map((eventName) => (
+            {visibleEvents.length ? visibleEvents.map((eventName) => (
               <button
                 key={eventName}
                 type="button"
@@ -628,7 +641,7 @@ function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error
                 {eventName}
               </button>
             )) : (
-              <p className="px-3 py-6 text-center text-xs text-slate-500">No events discovered yet. Ingest events first or type an event manually.</p>
+              <p className="px-3 py-6 text-center text-xs text-slate-500">{events.length ? 'No events match this search.' : 'No events discovered yet. Ingest events first or type an event manually.'}</p>
             )}
           </div>
         </div>
@@ -639,7 +652,7 @@ function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">{dimensions.length}</span>
           </div>
           <div className="max-h-72 space-y-2 overflow-auto">
-            {dimensions.length ? dimensions.map((dimension) => (
+            {visibleDimensions.length ? visibleDimensions.map((dimension) => (
               <div key={dimension} className="rounded-lg border border-slate-200 bg-white p-2">
                 <button type="button" onClick={() => onAddGroup(dimension)} className="block w-full truncate text-left text-xs font-semibold text-slate-800 hover:text-primary" title={`Add ${dimension} as group`}>
                   {dimension}
@@ -657,7 +670,7 @@ function MetricsCatalogPanel({ events, dimensions, selectedEvent, loading, error
                 </div>
               </div>
             )) : (
-              <p className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">Select an event to see its dimensions.</p>
+              <p className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-500">{dimensions.length ? 'No dimensions match this search.' : 'Select an event to see its dimensions.'}</p>
             )}
           </div>
         </div>
@@ -714,18 +727,6 @@ function MetricsRawMode({ value, onChange, onCopy, onFormat, onRun }) {
         </div>
       </div>
       <div className="panel-body"><JsonEditor value={value} onChange={onChange} minHeight="420px" /></div>
-    </section>
-  );
-}
-
-function JsonPanel({ title, description, value, onChange }) {
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
-        <p className="text-xs text-slate-500">{description}</p>
-      </div>
-      <div className="panel-body"><JsonEditor value={value} onChange={onChange} minHeight="220px" /></div>
     </section>
   );
 }

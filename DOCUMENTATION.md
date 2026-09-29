@@ -1172,6 +1172,38 @@ Root `_created_at` and `_modified_at` are rejected by default. With `allow_syste
 }
 ```
 
+#### Patch a nested field with dot notation
+
+Plain values and mutation operators use the same dot-path semantics. Missing intermediate objects are created automatically. If an intermediate value is not an object, it is replaced with an object so the requested path can be assigned. Dotted keys are never persisted as literal top-level property names.
+
+```json
+{
+  "db": "myapp/main",
+  "operation": "update",
+  "namespace": "users",
+  "payload": {
+    "data": {
+      "_id": "u1",
+      "profile.preferences.theme": "dark",
+      "profile.flags.verified": true
+    }
+  }
+}
+```
+
+The resulting document contains nested objects:
+
+```json
+{
+  "profile": {
+    "preferences": {"theme": "dark"},
+    "flags": {"verified": true}
+  }
+}
+```
+
+This behavior is identical for committed and accepted writes, explicit update arrays, filter updates, transactions, upserts, and lifecycle patches.
+
 #### Patch multiple explicit documents
 
 ```json

@@ -1965,7 +1965,8 @@ fn resolve_kdb_hash(arg: Value) -> AppResult<Value> {
 
 fn update_requires_mutation_engine(data: &serde_json::Map<String, Value>) -> bool {
     data.iter().any(|(path, value)| {
-        path.split('.').any(is_positional_selector)
+        path.contains('.')
+            || path.split('.').any(is_positional_selector)
             || matches!(value, Value::Object(obj) if obj.len() == 1 && obj.keys().next().is_some_and(|key| key.starts_with('$') || is_known_kdb_macro(key)))
     })
 }
@@ -3672,6 +3673,42 @@ mod transaction_tests {
             .expect("response namespace should be discarded without timestamp opt-in");
         assert!(ordinary.get("_namespace").is_none());
         assert_eq!(ordinary.get("name"), Some(&json!("Ada")));
+    }
+
+    #[test]
+    fn dotted_scalar_updates_use_nested_paths() {
+        let mut doc = json!({
+            "x": {"existing": true},
+            "unchanged": "value"
+        });
+        let mut patch = serde_json::Map::from_iter([
+            ("x.y.z".to_string(), json!(true)),
+            ("profile.name".to_string(), json!("Ada")),
+        ]);
+
+        assert!(update_requires_mutation_engine(&patch));
+        apply_mutation_patch_to_doc(&mut doc, &mut patch, None, true)
+            .expect("dotted scalar fields should update nested paths");
+
+        assert_eq!(
+            doc,
+            json!({
+                "x": {"existing": true, "y": {"z": true}},
+                "profile": {"name": "Ada"},
+                "unchanged": "value"
+            })
+        );
+        assert!(doc.get("x.y.z").is_none());
+    }
+
+    #[test]
+    fn ordinary_top_level_updates_do_not_require_mutation_engine() {
+        let patch = serde_json::Map::from_iter([
+            ("name".to_string(), json!("Ada")),
+            ("active".to_string(), json!(true)),
+        ]);
+
+        assert!(!update_requires_mutation_engine(&patch));
     }
 
     #[test]

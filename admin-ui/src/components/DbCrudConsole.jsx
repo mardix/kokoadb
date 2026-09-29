@@ -10,15 +10,17 @@ import { JsonEditor, formatJsonText } from './JsonEditor.jsx';
 import { PageHeader } from './Layout.jsx';
 import { MetricsEventsPanel } from './MetricsEventsConsole.jsx';
 import { ResponsePanel } from './ResponsePanel.jsx';
-import { FullTextSearchPanel } from './FullTextSearchPanel.jsx';
+import { FtsIndexPanel } from './FullTextSearchPanel.jsx';
 import { DocumentUiEditor } from './DocumentUiEditor.jsx';
+import { DataBrowserFrame, DataBrowserTabs } from './DataBrowserFrame.jsx';
+import { KokoaIcon } from './KokoaIcon.jsx';
 
 const operations = ['query', 'multi_query', 'insert', 'update', 'upsert', 'delete', 'count', 'aggregate', 'transaction', 'custom'];
 const SYSTEM_SETTINGS_NAMESPACE = '__system_settings';
 const DEFAULT_DOCUMENT_TABLE_PREFERENCES = {
   columnOrder: [],
   hiddenColumns: [],
-  topLevelOnly: false,
+  topLevelOnly: true,
   defaultSort: '_created_at desc'
 };
 const dbTabs = [
@@ -27,6 +29,7 @@ const dbTabs = [
   { id: 'identity', label: 'Identity' },
   { id: 'files', label: 'Files' },
   { id: 'metrics', label: 'Metrics' },
+  // Retained only so old /fts hashes can be redirected into DocumentDB Search.
   { id: 'fts', label: 'Search' },
   { id: 'sqlite', label: 'SQL' },
   { id: 'query', label: 'Query' },
@@ -36,7 +39,7 @@ const dbTabs = [
 const dbSectionHeaders = {
   crud: {
     eyebrow: 'Data',
-    description: 'Browse namespaces, inspect documents, create entries, and build structured document queries.'
+    description: 'Browse namespaces, inspect documents, build structured queries, and search FTS5 indexes.'
   },
   identity: {
     eyebrow: 'Identity',
@@ -49,10 +52,6 @@ const dbSectionHeaders = {
   metrics: {
     eyebrow: 'Metrics',
     description: 'Ingest metric events and query time-based aggregates for this database.'
-  },
-  fts: {
-    eyebrow: 'Search',
-    description: 'Search indexed documents across one or more namespaces and manage the database FTS lifecycle.'
   },
   sqlite: {
     eyebrow: 'SQL',
@@ -120,6 +119,7 @@ export function DbCrudConsole() {
   const [datastoreView, setDatastoreView] = useState('home');
   const [datastoreWizardOpen, setDatastoreWizardOpen] = useState(true);
   const [datastoreQuery, setDatastoreQuery] = useState({
+    search: '',
     filterText: '{}',
     sort: '_created_at desc',
     page: '1',
@@ -161,6 +161,12 @@ export function DbCrudConsole() {
     onHashChange();
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
+
+  useEffect(() => {
+    if (route.mode !== 'db' || route.tab !== 'fts' || !route.db) return;
+    setDatastoreView('query');
+    window.location.hash = `#crud/db/${encodeDbForHash(route.db)}/crud`;
+  }, [route.mode, route.tab, route.db]);
 
   useEffect(() => {
     if (route.mode === 'db' && route.db) {
@@ -251,6 +257,7 @@ export function DbCrudConsole() {
         setDocumentSort(String(request.payload?.sort || documentSort));
         setDocumentFilter(filter);
         setDatastoreQuery({
+          search: String(request.payload?.search || ''),
           filterText: pretty(filter),
           sort: String(request.payload?.sort || documentSort || '_created_at desc'),
           page: String(request.payload?.page || 1),
@@ -445,6 +452,7 @@ export function DbCrudConsole() {
     const sort = opts.sort || documentSort || '_created_at desc';
     const filter = opts.filter !== undefined ? opts.filter : documentFilter;
     const userId = opts.userId !== undefined ? opts.userId : datastoreQuery.userId;
+    const search = opts.search !== undefined ? opts.search : datastoreQuery.search;
     const attachUsers = opts.attachUsers !== undefined ? opts.attachUsers : datastoreQuery.attachUsers;
     const attachUserFields = opts.attachUserFields !== undefined ? opts.attachUserFields : datastoreQuery.attachUserFields;
     updateSetting('namespace', namespace);
@@ -458,6 +466,7 @@ export function DbCrudConsole() {
     setDocumentFilter(filter && typeof filter === 'object' && !Array.isArray(filter) ? filter : {});
     setDatastoreQuery((prev) => ({
       ...prev,
+      search: String(search || ''),
       filterText: pretty(filter && typeof filter === 'object' && !Array.isArray(filter) ? filter : {}),
       sort,
       page: String(page),
@@ -473,6 +482,7 @@ export function DbCrudConsole() {
       namespace,
       payload: {
         filter: filter && typeof filter === 'object' && !Array.isArray(filter) ? filter : {},
+        search: userFormValue(search),
         sort,
         page,
         per_page: pageSize,
@@ -503,7 +513,7 @@ export function DbCrudConsole() {
   function resetDocumentView() {
     if (!settings.namespace) return;
     setSelectedIds([]);
-    void loadNamespacePage(settings.namespace, 1, 25, { collapseRequest: true, sort: documentTablePreferences.defaultSort, filter: {} });
+    void loadNamespacePage(settings.namespace, 1, 25, { collapseRequest: true, sort: documentTablePreferences.defaultSort, filter: {}, search: '' });
   }
 
   function updateDatastoreQuery(patch) {
@@ -538,6 +548,7 @@ export function DbCrudConsole() {
         namespace: settings.namespace,
         payload: {
           filter,
+          search: userFormValue(datastoreQuery.search),
           sort,
           page,
           per_page: perPage,
@@ -549,6 +560,7 @@ export function DbCrudConsole() {
         }
       },
       filter,
+      search: datastoreQuery.search,
       sort,
       page,
       perPage
@@ -570,6 +582,7 @@ export function DbCrudConsole() {
       collapseRequest: true,
       sort: built.sort,
       filter: built.filter,
+      search: built.search,
       userId: datastoreQuery.userId,
       attachUsers: datastoreQuery.attachUsers,
       attachUserFields: datastoreQuery.attachUserFields
@@ -1086,7 +1099,6 @@ export function DbCrudConsole() {
         />
       ) : null}
       {route.tab === 'metrics' ? <MetricsEventsPanel embedded db={activeDb} /> : null}
-      {route.tab === 'fts' ? <FullTextSearchPanel db={activeDb} namespaces={activeNamespaces} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
       {route.tab === 'identity' ? <IdentityPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
       {route.tab === 'files' ? <FileCatalogPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
       {route.tab === 'sqlite' ? <SQLiteDbPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} /> : null}
@@ -1148,17 +1160,22 @@ export function DbCrudConsole() {
           ) : null}
 
           {datastoreView === 'home' ? (
-            <>
-              <div className="space-y-4">
-                <NamespaceTabs
-                  tabs={namespaceTabs}
-                  active={settings.namespace}
-                  onSelect={(namespace) => openNamespace(namespace)}
-                  onClose={closeNamespaceTab}
-                />
-
+            <DataBrowserFrame
+              label="Namespaces"
+              items={activeNamespaces.map((item) => ({
+                id: namespaceLabel(item),
+                label: namespaceLabel(item),
+                count: item.live_count ?? item.count ?? item.document_count ?? 0,
+                icon: '◇'
+              })).filter((item) => item.id)}
+              selected={settings.namespace}
+              onSelect={openNamespace}
+              searchPlaceholder="Filter namespaces..."
+              emptyMessage="No namespaces yet. Add an entry to create one."
+            >
+              <div className="data-browser-stack min-w-0">
                 {!namespaceTabs.length ? (
-                  <section className="panel p-8 text-center">
+                  <section className="p-8 text-center">
                     <h3 className="text-sm font-semibold text-slate-950">{activeNamespaces.length ? 'Select A Namespace' : 'Create Your First Entry'}</h3>
                     <p className="mt-1 text-sm text-slate-500">
                       {activeNamespaces.length
@@ -1193,7 +1210,7 @@ export function DbCrudConsole() {
                   <ResponsePanel data={response} durationMs={responseDurationMs} />
                 )}
               </div>
-            </>
+            </DataBrowserFrame>
           ) : null}
 
           {datastoreView === 'query' ? (
@@ -1267,6 +1284,10 @@ export function DbCrudConsole() {
                 )}
               </div>
             </>
+          ) : null}
+
+          {datastoreView === 'fts' ? (
+            <FtsIndexPanel db={activeDb} gateway={gateway} runStatusCall={runStatusCall} showToast={showToast} />
           ) : null}
         </section>
       )}
@@ -1716,149 +1737,130 @@ function DbOverviewPanel({ db, dbInfo, namespaces, stats, dataCount, onOpen, onR
   const metricEventCount = Number(dataCount?.metrics?.events ?? 0);
   const sqlTableCount = Number(dataCount?.tables?.count ?? 0);
   const sqlRowCount = Number(dataCount?.tables?.total_rows ?? 0);
-  const totalDataCount = liveEntries + identityCount + fileCount + metricEventCount + sqlRowCount;
   const requestCount = Number(stats?.requests_total || 0);
   const errorCount = Number(stats?.errors_total || 0);
   const errorRate = requestCount > 0 ? `${((errorCount / requestCount) * 100).toFixed(1)}%` : '0%';
   const storage = [truthy(dbInfo?.on_local) ? 'Local' : '', truthy(dbInfo?.on_s3) ? 'S3' : ''].filter(Boolean).join(' + ') || 'Unavailable';
   const tools = [
-    { id: 'crud', title: 'Data', description: 'Browse namespaces, query documents, and create or update records.', value: formatNumber(liveEntries), detail: `${formatNumber(namespaceCount)} namespaces` },
-    { id: 'identity', title: 'Identity', description: 'Manage users, providers, tokens, status, and identity events.', value: formatNumber(identityCount), detail: `${formatNumber(activeIdentityCount)} active` },
-    { id: 'files', title: 'Files', description: 'Track file metadata, owners, storage paths, and lifecycle state.', value: formatNumber(fileCount), detail: formatBytes(fileBytes) },
-    { id: 'metrics', title: 'Metrics', description: 'Ingest metric events and query time-bucketed aggregates.', value: formatNumber(metricEventCount), detail: 'events' },
-    { id: 'fts', title: 'Search', description: 'Search indexed documents and manage full-text index lifecycle.' },
-    { id: 'sqlite', title: 'SQL', description: 'Browse tables, inspect schema, edit rows, and execute SQL.', value: formatNumber(sqlTableCount), detail: `${formatNumber(sqlRowCount)} rows` }
+    { id: 'crud', icon: 'data', title: 'DocumentDB + FTS5', description: 'Browse namespaces, query records, and search indexed content.', value: formatNumber(liveEntries), detail: `${formatNumber(namespaceCount)} namespaces` },
+    { id: 'identity', icon: 'identity', title: 'Identity', description: 'Manage users, providers, tokens, status, and identity events.', value: formatNumber(identityCount), detail: `${formatNumber(activeIdentityCount)} active` },
+    { id: 'files', icon: 'files', title: 'Files', description: 'Track file metadata, owners, storage paths, and lifecycle state.', value: formatNumber(fileCount), detail: formatBytes(fileBytes) },
+    { id: 'metrics', icon: 'metrics', title: 'Metrics', description: 'Ingest metric events and query time-bucketed aggregates.', value: formatNumber(metricEventCount), detail: 'events' },
+    { id: 'sqlite', icon: 'sql', title: 'SQLiteDB', description: 'Browse tables, inspect schema, edit rows, and execute SQL.', value: formatNumber(sqlTableCount), detail: `${formatNumber(sqlRowCount)} rows` }
+  ];
+  const inventory = [
+    { label: 'Namespaces', value: formatNumber(namespaceCount) },
+    { label: 'Documents', value: formatNumber(liveEntries) },
+    { label: 'Identities', value: formatNumber(identityCount) },
+    { label: 'Files', value: formatNumber(fileCount) },
+    { label: 'Metric Events', value: formatNumber(metricEventCount) },
+    { label: 'On Disk', value: formatBytes(dbInfo?.local_size_bytes ?? dbInfo?.size_bytes ?? liveBytes) }
   ];
 
   return (
-    <section className="space-y-4">
-      <section className="overflow-hidden rounded-md border border-slate-300 bg-slate-50">
-        <div className="flex flex-col gap-6 bg-white px-6 py-7 md:flex-row md:items-start md:justify-between lg:px-8 lg:py-8">
+    <section className="space-y-5">
+      <section className="overflow-hidden rounded-md border border-slate-300 bg-white">
+        <div className="flex flex-col gap-5 px-5 py-5 md:flex-row md:items-start md:justify-between lg:px-6">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Database Overview</div>
-              <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] ${truthy(dbInfo?.loaded) ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Database Overview</div>
+            <h2 className="mt-2.5 break-all font-mono text-xl font-bold leading-tight tracking-tight text-slate-950">{db}</h2>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span className={`inline-flex items-center gap-1.5 font-semibold ${truthy(dbInfo?.loaded) ? 'text-emerald-700' : 'text-slate-600'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${truthy(dbInfo?.loaded) ? 'bg-emerald-600' : 'bg-slate-400'}`} aria-hidden="true" />
                 {truthy(dbInfo?.loaded) ? 'Loaded' : 'Not Loaded'}
               </span>
-            </div>
-            <h2 className="mt-4 break-all font-mono text-xl font-bold leading-tight tracking-tight text-slate-950 lg:text-[26px]">{db}</h2>
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-500">
-              <span className="rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-slate-500">Storage</span>
-              <span className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 font-mono text-slate-700">{storage}</span>
-              <span className="ml-1 text-slate-400">Live database workspace</span>
+              <span className="h-4 w-px bg-slate-300" aria-hidden="true" />
+              <span className="rounded border border-slate-300 bg-slate-50 px-2 py-1 font-mono text-[10px] font-semibold text-slate-600">{storage}</span>
+              <span className="text-slate-400">Live database workspace</span>
             </div>
           </div>
-          <button type="button" onClick={onRefresh} className="btn-secondary shrink-0 self-start">Refresh Overview</button>
+          <button type="button" onClick={onRefresh} className="btn-secondary shrink-0 self-start">Refresh</button>
         </div>
 
-        <div className="grid border-t border-slate-300 lg:grid-cols-2">
-          <div className="px-6 py-7 lg:border-r lg:px-8">
-            <div className="flex items-end justify-between gap-3">
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Inventory</h3>
-                <p className="mt-1 text-sm font-light text-slate-500">Data currently managed by this database.</p>
-              </div>
-              <span className="font-mono text-xs font-semibold text-slate-400">{formatBytes(dbInfo?.local_size_bytes ?? dbInfo?.size_bytes ?? liveBytes)}</span>
-            </div>
-            <div className="mt-6 grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 xl:grid-cols-5">
-              <OverviewMetric label="Total Data" value={formatNumber(totalDataCount)} />
-              <OverviewMetric label="Documents" value={formatNumber(liveEntries)} />
-              <OverviewMetric label="Identities" value={formatNumber(identityCount)} />
-              <OverviewMetric label="Files" value={formatNumber(fileCount)} />
-              <OverviewMetric label="Database Size" value={formatBytes(dbInfo?.local_size_bytes ?? dbInfo?.size_bytes ?? liveBytes)} />
-            </div>
+        <div className="grid grid-cols-2 border-t border-slate-300 bg-slate-200 gap-px sm:grid-cols-3 xl:grid-cols-6">
+          {inventory.map((item) => (
+            <OverviewMetric key={item.label} label={item.label} value={item.value} />
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold tracking-tight text-slate-950">Workspaces</h3>
+            <p className="mt-1 text-xs text-slate-500">Open a data product scoped to this database.</p>
           </div>
-          <div className="border-t border-slate-300 bg-white px-6 py-7 lg:border-t-0 lg:px-8">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">Traffic</h3>
-              <span className="rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-500">Current runtime</span>
+          <button type="button" onClick={() => onOpen('admin')} className="text-xs font-semibold text-primary hover:underline">Database Admin →</button>
+        </div>
+        <div className="grid overflow-hidden rounded-md border border-slate-300 bg-slate-200 gap-px md:grid-cols-2 xl:grid-cols-3">
+          {tools.map((tool) => (
+            <button key={tool.id} type="button" onClick={() => onOpen(tool.id)} className="group min-h-32 bg-white p-4 text-left transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-slate-400/30">
+              <div className="flex items-start justify-between gap-3">
+                <span className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-300 bg-slate-50 text-slate-600"><KokoaIcon name={tool.icon} className="h-4 w-4" /></span>
+                <span className="font-mono text-lg font-bold leading-none tracking-tight text-slate-700">{tool.value}</span>
+              </div>
+              <h4 className="mt-3 text-sm font-bold text-slate-900 group-hover:text-primary">{tool.title}</h4>
+              <p className="mt-1 text-xs leading-5 text-slate-500">{tool.description}</p>
+              <div className="mt-2 font-mono text-[10px] font-semibold uppercase tracking-wide text-primary">{tool.detail}</div>
+            </button>
+          ))}
+          <div className="min-h-32 bg-slate-50 p-4">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-300 bg-white text-slate-600"><KokoaIcon name="admin" className="h-4 w-4" /></span>
+              <h4 className="text-sm font-bold text-slate-900">Database Tools</h4>
             </div>
-            <p className="mt-1 text-sm font-light text-slate-500">Requests handled by this instance.</p>
-            <div className="mt-6 grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-4">
-              <OverviewMetric label="Requests" value={formatNumber(requestCount)} />
-              <OverviewMetric label="Reads" value={formatNumber(stats?.reads_total)} />
-              <OverviewMetric label="Writes" value={formatNumber(stats?.writes_total)} />
-              <OverviewMetric label={`Errors · ${errorRate}`} value={formatNumber(errorCount)} danger={errorCount > 0} />
+            <div className="mt-3 grid gap-1.5">
+              <button type="button" onClick={() => onOpen('query')} className="flex items-center justify-between text-left text-xs font-semibold text-primary hover:underline"><span className="flex items-center gap-2"><KokoaIcon name="query" className="h-3.5 w-3.5" />Query Console</span><span aria-hidden="true">→</span></button>
+              <button type="button" onClick={() => onOpen('stats')} className="flex items-center justify-between text-left text-xs font-semibold text-primary hover:underline"><span className="flex items-center gap-2"><KokoaIcon name="stats" className="h-3.5 w-3.5" />Database Stats</span><span aria-hidden="true">→</span></button>
+              <button type="button" onClick={() => onOpen('admin')} className="flex items-center justify-between text-left text-xs font-semibold text-primary hover:underline"><span className="flex items-center gap-2"><KokoaIcon name="admin" className="h-3.5 w-3.5" />Maintenance</span><span aria-hidden="true">→</span></button>
             </div>
           </div>
         </div>
       </section>
 
       <section>
-        <div className="mb-4">
-          <h3 className="text-lg font-bold tracking-tight text-slate-950">Workspaces</h3>
-          <p className="mt-1 text-sm font-light text-slate-500">Every workspace stays scoped to <span className="font-mono font-semibold text-slate-100 bg-slate-500 p-1">{db}</span>.</p>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {tools.map((tool) => (
-            <button key={tool.id} type="button" onClick={() => onOpen(tool.id)} className="group min-h-40 rounded-md border border-slate-300 bg-white p-5 text-left transition-colors hover:border-slate-500 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-400/30">
-              <div className="flex items-start justify-between gap-3">
-                <h4 className="text-md font-medium !tracking-wide text-slate-900 group-hover:text-primary">{tool.title}</h4>
-                {tool.value !== undefined ? <span className="font-mono text-xl font-bold leading-none tracking-tight text-slate-600 bg-slate-300 p-2 rounded-md">{tool.value}</span> : null}
-              </div>
-              <p className="mt-2 !font-thin text-slate-500">{tool.description}</p>
-              {tool.detail ? <div className="mt-4 text-xs font-mono font-light uppercase tracking-wide text-primary">{tool.detail}</div> : null}
-            </button>
-          ))}
-          <div className="min-h-40 rounded-md border border-dashed border-slate-400 bg-transparent p-5">
-            <h4 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">More Tools</h4>
-            <div className="mt-3 space-y-1">
-              <button type="button" onClick={() => onOpen('query')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Query</button>
-              <button type="button" onClick={() => onOpen('stats')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Stats</button>
-              <button type="button" onClick={() => onOpen('admin')} className="block text-base font-semibold text-slate-700 hover:text-slate-950 hover:underline">Admin</button>
-            </div>
-          </div>
+        <h3 className="mb-3 text-base font-bold tracking-tight text-slate-950">Operations</h3>
+        <div className="grid overflow-hidden rounded-md border border-slate-300 bg-slate-200 gap-px lg:grid-cols-3">
+          <button type="button" onClick={() => onOpen('stats')} className="flex min-h-16 items-center justify-between gap-3 bg-white px-4 py-3 text-left hover:bg-slate-50">
+            <span><span className="block text-xs font-bold text-slate-900">Request Activity</span><span className="mt-1 block text-[10px] text-slate-500">{formatNumber(requestCount)} requests · {formatNumber(stats?.reads_total)} reads · {formatNumber(stats?.writes_total)} writes</span></span>
+            <span className={`font-mono text-xs font-semibold ${errorCount > 0 ? 'text-rose-700' : 'text-slate-500'}`}>{formatNumber(errorCount)} errors · {errorRate}</span>
+          </button>
+          <button type="button" onClick={() => onOpen('query')} className="flex min-h-16 items-center justify-between gap-3 bg-white px-4 py-3 text-left hover:bg-slate-50">
+            <span className="flex items-center gap-3"><KokoaIcon name="query" className="h-4 w-4 text-slate-500" /><span><span className="block text-xs font-bold text-slate-900">Query Console</span><span className="mt-1 block text-[10px] text-slate-500">Run any database command.</span></span></span><span className="text-primary" aria-hidden="true">→</span>
+          </button>
+          <button type="button" onClick={() => onOpen('admin')} className="flex min-h-16 items-center justify-between gap-3 bg-white px-4 py-3 text-left hover:bg-slate-50">
+            <span className="flex items-center gap-3"><KokoaIcon name="admin" className="h-4 w-4 text-slate-500" /><span><span className="block text-xs font-bold text-slate-900">Database Admin</span><span className="mt-1 block text-[10px] text-slate-500">Snapshots, backups, and jobs.</span></span></span><span className="text-primary" aria-hidden="true">→</span>
+          </button>
         </div>
       </section>
     </section>
   );
 }
 
-function OverviewMetric({ label, value, muted = false, danger = false }) {
-  const valueTone = danger ? 'text-rose-700' : muted ? 'text-slate-400' : 'text-primary';
-  const labelTone = danger ? 'text-rose-700' : 'text-slate-500';
+function OverviewMetric({ label, value }) {
   return (
-    <div className="min-w-0">
-      <div className={`break-words font-mono text-xl font-bold leading-none tracking-tight ${valueTone}`}>{value ?? 'n/a'}</div>
-      <div className={`mt-3 text-sm font-medium ${labelTone}`}>{label}</div>
+    <div className="min-w-0 bg-white px-4 py-3.5">
+      <div className="break-words font-mono text-lg font-bold leading-none tracking-tight text-primary">{value ?? 'n/a'}</div>
+      <div className="mt-2 text-[10px] font-medium text-slate-500">{label}</div>
     </div>
   );
 }
 
 function DatastoreSubnav({ view, onView, namespaces, selected, onSelect, namespaceCount, onRefresh, onAdd, onDelete }) {
-  const options = namespaces.map((item) => namespaceLabel(item)).filter(Boolean);
-  const current = namespaces.find((item) => namespaceLabel(item) === selected);
-  const count = current?.live_count ?? current?.count ?? current?.document_count;
-  const size = current?.size_bytes ?? current?.total_size_bytes;
-
   return (
-    <section className="panel px-3 py-2">
-      <div className="flex flex-wrap items-center gap-2.5">
-        <div className="shrink-0 text-md font-semibold text-slate-950">Data</div>
-        <div className="flex shrink-0 flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
-          <button onClick={() => onView('home')} className={`btn-tab ${view === 'home' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Data</button>
-          <button onClick={() => onView('query')} className={`btn-tab ${view === 'query' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Query</button>
-          <button onClick={() => onView('namespaces')} className={`btn-tab ${view === 'namespaces' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Namespaces {namespaceCount ? `(${namespaceCount})` : ''}</button>
-        </div>
-        {view === 'home' ? (
-        <label className="flex min-w-[220px] flex-1 items-center gap-2">
-          <span className="shrink-0 text-xs uppercase tracking-wide text-slate-500"> | Select</span>
-          <select value={selected || ''} onChange={(event) => onSelect(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
-            {!options.length ? <option value="">No namespaces available</option> : null}
-            {options.length && !selected ? <option value="">Select a namespace</option> : null}
-            {options.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
-        ): null }
-
-        {selected && (count !== undefined || size !== undefined) ? (
-          <span className="hidden flex shrink-0 items-center gap-2 text-[11px] text-slate-500">
-            {count !== undefined ? <span>{Number(count).toLocaleString()} documents</span> : null}
-            {size !== undefined ? <span>{formatBytes(Number(size))}</span> : null}
-          </span>
-        ) : null}
-        <div className="ml-auto flex shrink-0 flex-wrap gap-2">
-          <button type="button" onClick={onRefresh} className="btn-secondary">Refresh{view === 'home' ? '' : ' namespaces'}</button>
+    <DataBrowserTabs
+      label="DocumentDB"
+      tabs={[
+        { id: 'home', label: 'Data' },
+        { id: 'query', label: 'Query' },
+        { id: 'fts', label: 'FTS5 Index' },
+        { id: 'namespaces', label: `Namespaces${namespaceCount ? ` (${namespaceCount})` : ''}` }
+      ]}
+      active={view}
+      onChange={onView}
+      actions={(
+        <>
+          {view !== 'fts' ? <button type="button" onClick={onRefresh} className="btn-secondary">Refresh{view === 'home' ? '' : ' namespaces'}</button> : null}
           {view === 'home' ? <button type="button" onClick={onAdd} className="btn-primary">Add New Entry</button> : null}
           {view === 'home' ? (
             <button
@@ -1874,9 +1876,9 @@ function DatastoreSubnav({ view, onView, namespaces, selected, onSelect, namespa
               </svg>
             </button>
           ) : null}
-        </div>
-      </div>
-    </section>
+        </>
+      )}
+    />
   );
 }
 
@@ -1901,6 +1903,7 @@ function NamespaceTabs({ tabs, active, onSelect, onClose }) {
 
 function FileCatalogPanel({ db, gateway, runStatusCall, showToast }) {
   const [mode, setMode] = useState('files');
+  const [fileScope, setFileScope] = useState('all');
   const [requestOpen, setRequestOpen] = useState(false);
   const [listResponse, setListResponse] = useState(null);
   const [listDurationMs, setListDurationMs] = useState(null);
@@ -1917,6 +1920,7 @@ function FileCatalogPanel({ db, gateway, runStatusCall, showToast }) {
     owner_id: '',
     storage_backend: '',
     content_type: '',
+    category: '',
     page: '1',
     perPage: '25'
   });
@@ -1973,6 +1977,15 @@ function FileCatalogPanel({ db, gateway, runStatusCall, showToast }) {
     await runFileRequest(buildFileListRequest(db, next));
   }
 
+  async function selectFileScope(scope) {
+    setFileScope(scope);
+    const status = scope === 'processing' ? 'processing' : scope === 'deleted' ? 'deleted' : '';
+    const category = scope === 'images' || scope === 'documents' ? scope : '';
+    const next = { ...query, status, content_type: '', category, page: '1' };
+    setQuery(next);
+    await runFileRequest(buildFileListRequest(db, next));
+  }
+
   function changeMode(nextMode) {
     setMode(nextMode);
     setRequestOpen(false);
@@ -1992,6 +2005,7 @@ function FileCatalogPanel({ db, gateway, runStatusCall, showToast }) {
         owner_id: '',
         storage_backend: '',
         content_type: '',
+        category: '',
         page: '1'
       };
       setQuery(nextQuery);
@@ -2091,22 +2105,37 @@ function FileCatalogPanel({ db, gateway, runStatusCall, showToast }) {
       <FileCatalogSubnav mode={mode} onMode={changeMode} totalFiles={totalFiles} onRefresh={() => refreshFiles()} />
 
       {mode === 'files' ? (
-        <>
-          <FileBrowseToolbar form={query} onChange={updateQuery} onRun={() => refreshFiles(1, query.perPage)} onReset={() => {
-            const next = { ...query, search: '', bucket: '', status: '', page: '1' };
-            setQuery(next);
-            void runFileRequest(buildFileListRequest(db, next));
-          }} />
-          <FileCatalogTable
-            title="File Inventory"
-            files={files}
-            response={listResponse}
-            durationMs={listDurationMs}
-            onView={viewFile}
-            onPage={(page) => refreshFiles(page, query.perPage)}
-            onPageSize={(pageSize) => refreshFiles(1, pageSize)}
-          />
-        </>
+        <DataBrowserFrame
+          label="File Views"
+          items={[
+            { id: 'all', label: 'All Files', count: fileScope === 'all' ? totalFiles : undefined, icon: '▧' },
+            { id: 'images', label: 'Images', count: fileScope === 'images' ? totalFiles : undefined, icon: '▧' },
+            { id: 'documents', label: 'Documents', count: fileScope === 'documents' ? totalFiles : undefined, icon: '▤' },
+            { id: 'processing', label: 'Processing', count: fileScope === 'processing' ? totalFiles : undefined, icon: '◌' },
+            { id: 'deleted', label: 'Deleted', count: fileScope === 'deleted' ? totalFiles : undefined, icon: '⊘' }
+          ]}
+          selected={fileScope}
+          onSelect={selectFileScope}
+          searchPlaceholder="Filter file views..."
+        >
+          <div className="data-browser-stack min-w-0">
+            <FileBrowseToolbar form={query} onChange={updateQuery} onRun={() => refreshFiles(1, query.perPage)} onReset={() => {
+              setFileScope('all');
+              const next = { ...query, search: '', bucket: '', status: '', category: '', page: '1' };
+              setQuery(next);
+              void runFileRequest(buildFileListRequest(db, next));
+            }} />
+            <FileCatalogTable
+              title={fileScope === 'all' ? 'All Files' : fileScope === 'images' ? 'Images' : fileScope === 'documents' ? 'Documents' : fileScope === 'processing' ? 'Processing Files' : 'Deleted Files'}
+              files={files}
+              response={listResponse}
+              durationMs={listDurationMs}
+              onView={viewFile}
+              onPage={(page) => refreshFiles(page, query.perPage)}
+              onPageSize={(pageSize) => refreshFiles(1, pageSize)}
+            />
+          </div>
+        </DataBrowserFrame>
       ) : null}
 
       {mode === 'query' ? (
@@ -2175,20 +2204,18 @@ function FileCatalogPanel({ db, gateway, runStatusCall, showToast }) {
 
 function FileCatalogSubnav({ mode, onMode, totalFiles, onRefresh }) {
   return (
-    <section className="panel px-3 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="text-sm font-semibold text-slate-950">Files</div>
-          <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
-            <button onClick={() => onMode('files')} className={`btn-tab ${mode === 'files' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Browse {totalFiles !== undefined ? `(${totalFiles})` : ''}</button>
-            <button onClick={() => onMode('add')} className={`btn-tab ${mode === 'add' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Add File</button>
-            <button onClick={() => onMode('update')} className={`btn-tab ${mode === 'update' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Update</button>
-            <button onClick={() => onMode('query')} className={`btn-tab ${mode === 'query' ? 'btn-tab-active' : 'btn-tab-idle'}`}>Query</button>
-          </div>
-        </div>
-        {mode === 'files' || mode === 'query' ? <button onClick={onRefresh} className="btn-secondary">Refresh Files</button> : null}
-      </div>
-    </section>
+    <DataBrowserTabs
+      label="Files"
+      tabs={[
+        { id: 'files', label: `Data${totalFiles !== undefined ? ` (${formatNumber(totalFiles)})` : ''}` },
+        { id: 'query', label: 'Query' },
+        { id: 'add', label: 'Add File' },
+        { id: 'update', label: 'Update' }
+      ]}
+      active={mode}
+      onChange={onMode}
+      actions={mode === 'files' || mode === 'query' ? <button onClick={onRefresh} className="btn-secondary">Refresh Files</button> : null}
+    />
   );
 }
 
@@ -2369,7 +2396,7 @@ function FileCatalogTable({ title = 'File Inventory', files, response, durationM
   const perPage = Number(pagination.per_page || response?.data?.limit || 25);
   const totalItems = Number(pagination.total_items || response?.data?.total_items || files.length || 0);
   return (
-    <section className="panel">
+    <section className="panel data-browser-table-panel">
       <div className="panel-header-row">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
@@ -2387,7 +2414,7 @@ function FileCatalogTable({ title = 'File Inventory', files, response, durationM
           <button onClick={() => onPage(page + 1)} disabled={!pagination.next_page} className="btn-secondary disabled:opacity-50">Next</button>
         </div>
       </div>
-      <div className="overflow-auto p-4">
+      <div className="data-browser-table-scroll p-4">
         {!files.length ? <EmptyCards message="No file metadata found for this query." /> : (
           <table className="w-full min-w-[980px] border-separate border-spacing-0 text-sm">
             <thead>
@@ -2471,6 +2498,7 @@ function buildFileListRequest(db, query) {
       owner_id: query.owner_id,
       storage_backend: query.storage_backend,
       content_type: query.content_type,
+      file_category: query.category,
       page: parseOptionalInt(query.page) || 1,
       per_page: parseOptionalInt(query.perPage) || 25
     })
@@ -2534,14 +2562,14 @@ function DatastoreQueryWizard({ namespace, namespaces, form, open, onToggle, onN
       <button type="button" onClick={onToggle} className="flex w-full items-center justify-between border-b border-slate-200 px-4 py-3 text-left">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">Query Wizard</h3>
-          <p className="text-xs text-slate-500">Build a namespace query with filter, sort, and pagination controls.</p>
+          <p className="text-xs text-slate-500">Build a namespace query with optional FTS5 search, filters, sorting, and pagination.</p>
         </div>
         <span className="text-xs font-semibold text-slate-500">{open ? 'Hide' : 'Show'}</span>
       </button>
 
       {open ? (
         <div className="space-y-4 p-4">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_120px_120px]">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_minmax(0,1.2fr)_minmax(0,1fr)_90px_100px]">
             <label className="block">
               <span className="field-label">Namespace</span>
               <select value={namespace || ''} onChange={(event) => onNamespace(event.target.value)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
@@ -2549,6 +2577,7 @@ function DatastoreQueryWizard({ namespace, namespaces, form, open, onToggle, onN
                 {namespaces.map(namespaceLabel).filter(Boolean).map((name) => <option key={name} value={name}>{name}</option>)}
               </select>
             </label>
+            <Field label="Search (FTS5)" value={form.search || ''} onChange={(value) => onChange({ search: value, page: '1' })} placeholder="login OR session, exact phrase, prefix*" />
             <Field label="Sort" value={form.sort} onChange={(value) => onChange({ sort: value })} placeholder="_created_at desc, name asc" />
             <Field label="Page" value={form.page} onChange={(value) => onChange({ page: value })} placeholder="1" />
             <Field label="Per Page" value={form.perPage} onChange={(value) => onChange({ perPage: value })} placeholder="25" />
@@ -2619,6 +2648,7 @@ function DatastoreQueryWizard({ namespace, namespaces, form, open, onToggle, onN
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap gap-2 text-xs text-slate-500">
               <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono">filter</span>
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono">search (optional)</span>
               <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono">sort</span>
               <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 font-mono">page/per_page</span>
             </div>
@@ -2809,7 +2839,7 @@ function DocumentsPanel({ rows, response, durationMs, sort, namespace, requestTe
   }
 
   return (
-    <section className="document-table-panel">
+    <section className="document-table-panel data-browser-table-panel">
       <div className="document-table-toolbar">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -2825,7 +2855,7 @@ function DocumentsPanel({ rows, response, durationMs, sort, namespace, requestTe
           </div>
           <div className="document-table-control-group">
             <button onClick={() => setColumnsOpen((value) => !value)} disabled={!orderedKeys.length} className={`document-table-control ${columnsOpen ? 'document-table-control-active' : ''}`}>Columns{hiddenCount ? ` · ${hiddenCount}` : ''}</button>
-            <button onClick={() => updateTablePreferences({ topLevelOnly: !tablePreferences.topLevelOnly })} disabled={!rows.length} className={`document-table-control ${tablePreferences.topLevelOnly ? 'document-table-control-active' : ''}`}>{tablePreferences.topLevelOnly ? 'Top Level' : 'Dot Paths'}</button>
+            <button onClick={() => updateTablePreferences({ topLevelOnly: !tablePreferences.topLevelOnly })} disabled={!rows.length} className={`document-table-control ${tablePreferences.topLevelOnly ? '' : 'document-table-control-active'}`}>{tablePreferences.topLevelOnly ? 'Expand Nested Columns' : 'Collapse Nested Columns'}</button>
             {preferencesDirty ? <button type="button" onClick={() => onSavePreferences(tablePreferences)} disabled={namespace === SYSTEM_SETTINGS_NAMESPACE} className="document-table-control document-table-control-save">Save View</button> : null}
           </div>
           <div className="document-table-control-group">
@@ -3224,7 +3254,7 @@ function EntryModal({ modal, namespaces = [], onChange, onClose, onSubmit }) {
 }
 
 function RowDrawer({ row, namespaceFallback, onClose, onEdit, onDelete, onCopyId, onCopyJson, onSetTtl, onLifecycle, onUpdateMetadata }) {
-  const [viewMode, setViewMode] = useState('tree');
+  const [viewMode, setViewMode] = useState('json');
   const [detailTab, setDetailTab] = useState('document');
   const [metadataMode, setMetadataMode] = useState('view');
   const [metadataText, setMetadataText] = useState(() => pretty(row?._metadata || {}));
@@ -3241,7 +3271,7 @@ function RowDrawer({ row, namespaceFallback, onClose, onEdit, onDelete, onCopyId
   const expiryBehavior = String(row?._expiry_behavior || row?.data?._expiry_behavior || document?._expiry_behavior || 'archive');
 
   useEffect(() => {
-    setViewMode('tree');
+    setViewMode('json');
     setDetailTab('document');
     setMetadataMode('view');
     setMetadataText(pretty(row?._metadata || {}));
@@ -3858,6 +3888,7 @@ function emptyIdentityForm(action = 'create') {
 
 function IdentityPanel({ db, gateway, runStatusCall, showToast }) {
   const [mode, setMode] = useState('users');
+  const [identityScope, setIdentityScope] = useState('all');
   const [userAction, setUserAction] = useState('create');
   const [requestOpen, setRequestOpen] = useState(false);
   const [listResponse, setListResponse] = useState(null);
@@ -3873,6 +3904,7 @@ function IdentityPanel({ db, gateway, runStatusCall, showToast }) {
   const [userQuery, setUserQuery] = useState({
     search: '',
     status: '',
+    emailVerified: '',
     email: '',
     username: '',
     page: '1',
@@ -3900,6 +3932,9 @@ function IdentityPanel({ db, gateway, runStatusCall, showToast }) {
   const request = buildIdentityRequest(db, mode, userAction, 'link', userForm, statusForm, null, providerForm, userQuery);
   const requestText = pretty(request);
   const users = extractArray(listResponse, ['data.items', 'items']);
+  const visibleUsers = identityScope === 'unverified'
+    ? users.filter((user) => !user.email_verified_at)
+    : users;
 
   useEffect(() => {
     if (db) void runIdentityRequest(buildIdentityListRequest(db, userQuery), { silent: true });
@@ -4007,6 +4042,14 @@ function IdentityPanel({ db, gateway, runStatusCall, showToast }) {
 
   async function refreshUsers(page = userQuery.page, perPage = userQuery.perPage) {
     const next = { ...userQuery, page: String(page), perPage: String(perPage) };
+    setUserQuery(next);
+    await runIdentityRequest(buildIdentityListRequest(db, next));
+  }
+
+  async function selectIdentityScope(scope) {
+    setIdentityScope(scope);
+    const status = scope === 'active' ? 'active' : scope === 'suspended' ? 'suspended' : '';
+    const next = { ...userQuery, status, emailVerified: scope === 'unverified' ? false : '', page: '1' };
     setUserQuery(next);
     await runIdentityRequest(buildIdentityListRequest(db, next));
   }
@@ -4149,25 +4192,39 @@ function IdentityPanel({ db, gateway, runStatusCall, showToast }) {
       <IdentitySubnav mode={mode} onMode={changeMode} totalUsers={listResponse?.data?.total_items} onRefreshUsers={() => refreshUsers()} />
 
       {mode === 'users' ? (
-        <>
-          <IdentityBrowseToolbar form={userQuery} onChange={updateUserQuery} onRun={() => refreshUsers(1, userQuery.perPage)} onReset={() => {
-            const next = { ...userQuery, search: '', status: '', email: '', username: '', page: '1' };
-            setUserQuery(next);
-            void runIdentityRequest(buildIdentityListRequest(db, next));
-          }} />
-          <IdentityUsersTable
-            title="Latest Identities"
-            users={users}
-            response={listResponse}
-            durationMs={listDurationMs}
-            selectedIds={selectedUserIds}
-            onSelectedIds={setSelectedUserIds}
-            onPage={(page) => refreshUsers(page, userQuery.perPage)}
-            onPageSize={(pageSize) => refreshUsers(1, pageSize)}
-            onView={loadUserDetails}
-            onBulk={(action) => setBulkModal({ action, status: action === 'status' ? 'active' : '', status_reason: '', purge: false })}
-          />
-        </>
+        <DataBrowserFrame
+          label="Identity Views"
+          items={[
+            { id: 'all', label: 'All Identities', count: identityScope === 'all' ? listResponse?.data?.total_items : undefined, icon: '◎' },
+            { id: 'active', label: 'Active Users', count: identityScope === 'active' ? listResponse?.data?.total_items : undefined, icon: '●' },
+            { id: 'unverified', label: 'Unverified', count: identityScope === 'unverified' ? visibleUsers.length : undefined, icon: '○' },
+            { id: 'suspended', label: 'Suspended', count: identityScope === 'suspended' ? listResponse?.data?.total_items : undefined, icon: '⊘' }
+          ]}
+          selected={identityScope}
+          onSelect={selectIdentityScope}
+          searchPlaceholder="Filter identity views..."
+        >
+          <div className="data-browser-stack min-w-0">
+            <IdentityBrowseToolbar form={userQuery} onChange={updateUserQuery} onRun={() => refreshUsers(1, userQuery.perPage)} onReset={() => {
+              setIdentityScope('all');
+              const next = { ...userQuery, search: '', status: '', emailVerified: '', email: '', username: '', page: '1' };
+              setUserQuery(next);
+              void runIdentityRequest(buildIdentityListRequest(db, next));
+            }} />
+            <IdentityUsersTable
+              title={identityScope === 'all' ? 'All Identities' : identityScope === 'unverified' ? 'Unverified Identities' : `${formatIdentityLabel(identityScope)} Users`}
+              users={visibleUsers}
+              response={listResponse}
+              durationMs={listDurationMs}
+              selectedIds={selectedUserIds}
+              onSelectedIds={setSelectedUserIds}
+              onPage={(page) => refreshUsers(page, userQuery.perPage)}
+              onPageSize={(pageSize) => refreshUsers(1, pageSize)}
+              onView={loadUserDetails}
+              onBulk={(action) => setBulkModal({ action, status: action === 'status' ? 'active' : '', status_reason: '', purge: false })}
+            />
+          </div>
+        </DataBrowserFrame>
       ) : null}
 
       {mode === 'add' ? (
@@ -4346,21 +4403,16 @@ function IdentityBrowseToolbar({ form, onChange, onRun, onReset }) {
 
 function IdentitySubnav({ mode, onMode, totalUsers, onRefreshUsers }) {
   return (
-    <section className="panel px-3 py-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="text-sm font-semibold text-slate-950">Identity</div>
-          <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
-            {identityModes.map((item) => (
-              <button key={item.id} onClick={() => onMode(item.id)} className={`btn-tab ${mode === item.id ? 'btn-tab-active' : 'btn-tab-idle'}`}>
-                {item.label}{item.id === 'users' && Number.isFinite(Number(totalUsers)) ? ` (${formatNumber(totalUsers)})` : ''}
-              </button>
-            ))}
-          </div>
-        </div>
-        {mode === 'users' ? <button onClick={onRefreshUsers} className="btn-secondary">Refresh Identities</button> : null}
-      </div>
-    </section>
+    <DataBrowserTabs
+      label="Identity"
+      tabs={identityModes.map((item) => ({
+        ...item,
+        label: `${item.label}${item.id === 'users' && Number.isFinite(Number(totalUsers)) ? ` (${formatNumber(totalUsers)})` : ''}`
+      }))}
+      active={mode}
+      onChange={onMode}
+      actions={mode === 'users' ? <button onClick={onRefreshUsers} className="btn-secondary">Refresh Identities</button> : null}
+    />
   );
 }
 
@@ -4377,7 +4429,7 @@ function IdentityUsersTable({ title = 'Latest Identities', users, response, dura
   }
 
   return (
-    <section className="panel">
+    <section className="panel data-browser-table-panel">
       <div className="panel-header-row">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">{title}</h3>
@@ -4394,7 +4446,7 @@ function IdentityUsersTable({ title = 'Latest Identities', users, response, dura
           </select> : null}
         </div>
       </div>
-      <div className="overflow-auto p-4">
+      <div className="data-browser-table-scroll p-4">
         {users.length ? (
           <table className="data-grid min-w-[1240px]">
             <thead>
@@ -4866,6 +4918,7 @@ function buildIdentityListRequest(db, userQuery) {
     payload: cleanPayload({
       search: userFormValue(userQuery.search),
       status: userFormValue(userQuery.status),
+      email_verified: userQuery.emailVerified === false ? false : userQuery.emailVerified === true ? true : undefined,
       email: userFormValue(userQuery.email),
       username: userFormValue(userQuery.username),
       page: parseOptionalInt(userQuery.page) || 1,
@@ -4886,6 +4939,7 @@ function userFormValue(value) {
 }
 
 function SQLiteDbPanel({ db, gateway, runStatusCall, showToast }) {
+  const [sqlMode, setSqlMode] = useState('data');
   const [tables, setTables] = useState([]);
   const [activeTable, setActiveTable] = useState('');
   const [sql, setSql] = useState('SELECT name FROM sqlite_master WHERE type = "table" ORDER BY name;');
@@ -4952,6 +5006,16 @@ function SQLiteDbPanel({ db, gateway, runStatusCall, showToast }) {
     setActiveTable(name);
     setQueryWizard((prev) => ({ ...prev, table: name }));
     await executeSql(`SELECT rowid AS __rowid, * FROM ${quoteIdent(name)} LIMIT 100;`, '[]');
+  }
+
+  async function selectSqlObject(value) {
+    if (value === '__all') {
+      setActiveTable('');
+      await refreshTables();
+      return;
+    }
+    if (sqlMode === 'structure') await structureTable(value);
+    else await browseTable(value);
   }
 
   async function dumpTable(table) {
@@ -5070,96 +5134,93 @@ function SQLiteDbPanel({ db, gateway, runStatusCall, showToast }) {
 
   return (
     <section className="space-y-4">
-      <section className="panel">
-        <div className="panel-header-row">
-          <div>
-            <h3 className="text-sm font-semibold text-slate-950">SQL</h3>
-            <p className="text-xs text-slate-500">Regular SQL workspace for user tables in this database.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
+      <DataBrowserTabs
+        label="SQLiteDB"
+        tabs={[
+          { id: 'data', label: 'Data' },
+          { id: 'query', label: 'Query' },
+          { id: 'structure', label: 'Structure' }
+        ]}
+        active={sqlMode}
+        onChange={(nextMode) => {
+          setSqlMode(nextMode);
+          if (nextMode === 'structure' && activeTable) void structureTable(activeTable);
+        }}
+        actions={(
+          <>
+            <button onClick={refreshTables} className="btn-secondary">Refresh Tables</button>
+            {activeTable ? <button onClick={() => openInsertRow(activeTable)} className="btn-secondary">Insert Row</button> : null}
             <button onClick={() => setCreateOpen(true)} className="btn-primary">Create Table</button>
-          </div>
-        </div>
-      </section>
+          </>
+        )}
+      />
 
-      <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-        <section className="panel">
-          <div className="panel-header-row">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-950">Tables</h3>
-              <p className="text-xs text-slate-500">{tables.length} user table{tables.length === 1 ? '' : 's'}</p>
-            </div>
-            <button onClick={refreshTables} className="btn-secondary">Refresh</button>
-          </div>
-          <div className="max-h-[520px] overflow-auto p-2">
-            {tables.length ? tables.map((table) => {
-              const name = table.name || String(table);
-              return (
-                <div key={name} className={`mb-2 rounded-lg border p-2 ${activeTable === name ? 'border-primary bg-primary/10' : 'border-slate-200 bg-white'}`}>
-                  <button onClick={() => browseTable(name)} className="block w-full truncate text-left font-mono text-xs font-semibold text-slate-900">{name}</button>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    <button onClick={() => browseTable(name)} className="btn-label">Browse</button>
-                    <button onClick={() => openInsertRow(name)} className="btn-label">Insert</button>
-                    <button onClick={() => structureTable(name)} className="btn-label-secondary">Structure</button>
-                    <TableDangerActions onDeleteAll={() => deleteAllRows(name)} onDrop={() => dropTable(name)} />
+      <DataBrowserFrame
+        label="Tables"
+        items={[
+          { id: '__all', label: 'All Tables', count: tables.length, icon: '▦' },
+          ...tables.map((table) => {
+            const name = table.name || String(table);
+            return { id: name, label: name, count: table.row_count ?? table.rows, icon: '▤' };
+          })
+        ]}
+        selected={activeTable || '__all'}
+        onSelect={selectSqlObject}
+        searchPlaceholder="Filter tables..."
+        emptyMessage="No user tables found."
+      >
+        <div className="data-browser-stack min-w-0">
+          {sqlMode === 'query' ? (
+            <section className="panel">
+              <div className="panel-header-row">
+                <div><h3 className="text-sm font-semibold text-slate-950">SQL Query</h3><p className="text-xs text-slate-500">Execute SELECT, DDL, and DML through sql_execute.</p></div>
+                <div className="flex flex-wrap gap-2"><button onClick={copyDump} disabled={!rows.length} className="btn-secondary">Copy Rows</button><button onClick={() => executeSql()} className="btn-primary">Run SQL</button></div>
+              </div>
+              <CollapsiblePanel title="Query Builder" description="Build a SELECT statement from the active table." open={queryWizardOpen} onToggle={() => setQueryWizardOpen((value) => !value)}>
+                <SqlQueryWizard
+                  value={queryWizard}
+                  tables={tables}
+                  activeTable={activeTable}
+                  onChange={(patch) => setQueryWizard((prev) => ({ ...prev, ...patch }))}
+                  onApply={applyQueryWizard}
+                  onRun={() => {
+                    const statement = buildSelectSql({ ...queryWizard, table: queryWizard.table || activeTable });
+                    if (!statement) return showToast('Choose a table first', true);
+                    void executeSql(statement, '[]');
+                  }}
+                />
+              </CollapsiblePanel>
+              <CollapsiblePanel title="Request" description="Raw SQL and positional params sent to sql_execute." open={sqlRequestOpen} onToggle={() => setSqlRequestOpen((value) => !value)}>
+                <div className="grid gap-4 p-4 lg:grid-cols-[1fr_260px]">
+                  <div><div className="field-label">SQL</div><textarea value={sql} onChange={(event) => setSql(event.target.value)} className="code-editor h-52" /></div>
+                  <div><div className="field-label">Params JSON Array</div><JsonEditor value={paramsText} onChange={setParamsText} minHeight="208px" /></div>
+                </div>
+              </CollapsiblePanel>
+            </section>
+          ) : null}
+
+          {sqlMode === 'data' ? (
+            <>
+              {activeTable ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2">
+                  <div className="font-mono text-xs font-bold text-slate-900">{activeTable}</div>
+                  <div className="flex gap-2">
+                    <button onClick={() => dumpTable(activeTable)} className="btn-secondary">Dump Table</button>
+                    <TableDangerActions onDeleteAll={() => deleteAllRows(activeTable)} onDrop={() => dropTable(activeTable)} />
                   </div>
                 </div>
-              );
-            }) : <EmptyCards message="No user tables found. Create one to start using SQL." />}
-          </div>
-        </section>
+              ) : null}
+              <SqlRowsPanel rows={rows} response={response} durationMs={durationMs} activeTable={activeTable} onEdit={openEditRow} />
+            </>
+          ) : null}
 
-        <section className="panel">
-          <div className="panel-header-row">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-950">SQL Query</h3>
-              <p className="text-xs text-slate-500">Execute SELECT/DDL/DML through `sql_execute`.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => executeSql()} className="btn-primary">Run SQL</button>
-              <button onClick={copyDump} disabled={!rows.length} className="btn-secondary">Copy Rows</button>
-            </div>
-          </div>
-          <CollapsiblePanel
-            title="Query Builder"
-            description="Build a simple SELECT, then apply it to the SQL request."
-            open={queryWizardOpen}
-            onToggle={() => setQueryWizardOpen((value) => !value)}
-          >
-            <SqlQueryWizard
-              value={queryWizard}
-              tables={tables}
-              activeTable={activeTable}
-              onChange={(patch) => setQueryWizard((prev) => ({ ...prev, ...patch }))}
-              onApply={applyQueryWizard}
-              onRun={() => {
-                const statement = buildSelectSql({ ...queryWizard, table: queryWizard.table || activeTable });
-                if (!statement) return showToast('Choose a table first', true);
-                void executeSql(statement, '[]');
-              }}
-            />
-          </CollapsiblePanel>
-          <CollapsiblePanel
-            title="Request"
-            description="Raw SQL and positional params sent to sql_execute."
-            open={sqlRequestOpen}
-            onToggle={() => setSqlRequestOpen((value) => !value)}
-          >
-            <div className="grid gap-4 p-4 lg:grid-cols-[1fr_260px]">
-              <div>
-                <div className="field-label">SQL</div>
-                <textarea value={sql} onChange={(event) => setSql(event.target.value)} className="code-editor h-52" />
-              </div>
-              <div>
-                <div className="field-label">Params JSON Array</div>
-                <JsonEditor value={paramsText} onChange={setParamsText} minHeight="208px" />
-              </div>
-            </div>
-          </CollapsiblePanel>
-        </section>
-      </div>
-
-      <SqlRowsPanel rows={rows} response={response} durationMs={durationMs} activeTable={activeTable} onEdit={openEditRow} />
+          {sqlMode === 'structure' ? (
+            activeTable
+              ? <ResponsePanel title={`${activeTable} Structure`} data={response} durationMs={durationMs} />
+              : <EmptyCards message="Select a table to inspect its schema." />
+          ) : null}
+        </div>
+      </DataBrowserFrame>
 
       {createOpen ? <CreateSqlTableModal onClose={() => setCreateOpen(false)} onSubmit={createTable} /> : null}
       {insertModal ? (
@@ -5185,7 +5246,7 @@ function SQLiteDbPanel({ db, gateway, runStatusCall, showToast }) {
 function SqlRowsPanel({ rows, response, durationMs, activeTable, onEdit }) {
   const { rows: flattened, keys } = rowColumns(rows.map((row) => flattenRow(row)));
   return (
-    <section className="panel">
+    <section className="panel data-browser-table-panel">
       <div className="panel-header-row">
         <div>
           <h3 className="text-sm font-semibold text-slate-950">Results</h3>
@@ -5195,7 +5256,7 @@ function SqlRowsPanel({ rows, response, durationMs, activeTable, onEdit }) {
           </p>
         </div>
       </div>
-      <div className="overflow-auto p-4">
+      <div className="data-browser-table-scroll p-4">
         {rows.length ? (
           <table className="data-grid min-w-[820px]">
             <thead>
@@ -6445,7 +6506,7 @@ function normalizeDocumentTablePreferences(value) {
   return {
     columnOrder: Array.isArray(source.columnOrder) ? source.columnOrder.map(String) : [],
     hiddenColumns: Array.isArray(source.hiddenColumns) ? source.hiddenColumns.map(String).filter((key) => !key.startsWith('_')) : [],
-    topLevelOnly: source.topLevelOnly === true,
+    topLevelOnly: Object.prototype.hasOwnProperty.call(source, 'topLevelOnly') ? source.topLevelOnly === true : true,
     defaultSort: String(source.defaultSort || '_created_at desc').trim() || '_created_at desc'
   };
 }
