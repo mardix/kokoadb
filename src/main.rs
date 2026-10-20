@@ -701,7 +701,7 @@ mod write_coordinator_repro_tests {
             payload: OperationPayload {
                 collection: Some("users".to_string()),
                 data: Some(json!({"_id": "http-repro-1"})),
-                user_id: Some("identity-1".to_string()),
+                user_id: Some(json!("identity-1")),
                 metadata: Some(json!({"hello": "world"})),
                 commit: Some(true),
                 ..Default::default()

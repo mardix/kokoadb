@@ -6,7 +6,8 @@ async fn user_create(
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = normalize_optional_id(payload.user_id)?.unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+    let user_id = normalize_optional_id(user_id_text(payload.user_id, "user_id")?)?
+        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let status = non_empty_or(payload.status, "status", "active")?;
     let email = clean_optional(payload.email);
     let username = clean_optional(payload.username);
@@ -113,7 +114,7 @@ async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
         return Ok(GatewayResponse::ok(Some(json!({"item": item}))));
     }
 
-    let (where_sql, bind) = if let Some(user_id) = clean_optional(payload.user_id).or(payload.id) {
+    let (where_sql, bind) = if let Some(user_id) = user_id_text(payload.user_id, "user_id")?.or(payload.id) {
         ("id = ?", user_id)
     } else if let Some(email) = clean_optional(payload.email) {
         ("email = ?", email)
@@ -191,6 +192,7 @@ async fn attach_identity_credentials(
 
 async fn user_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
+    let order_by = identity_user_order_by(payload.sort.as_ref())?;
     let page = payload.page.unwrap_or(1).max(1);
     let limit = payload
         .per_page
@@ -255,7 +257,7 @@ async fn user_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
             &format!(
                 "SELECT {} FROM __kdb_identity_users
                  WHERE {where_clause}
-                 ORDER BY created_at DESC, id DESC
+                 ORDER BY {order_by}
                  LIMIT ? OFFSET ?",
                 identity_user_select()
             ),
@@ -301,9 +303,47 @@ async fn user_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
     }))))
 }
 
+fn identity_user_order_by(sort: Option<&Value>) -> AppResult<String> {
+    let Some(sort) = sort else {
+        return Ok("created_at DESC, id DESC".to_string());
+    };
+    let fields = match sort {
+        Value::String(value) => parse_sort_string(value)?,
+        Value::Object(values) if !values.is_empty() => values
+            .iter()
+            .map(|(field, direction)| Ok((field.clone(), parse_sort_dir(direction)?)))
+            .collect::<AppResult<Vec<_>>>()?,
+        _ => {
+            return Err(AppError::BadRequest(
+                "user_query sort must be a non-empty string or object".to_string(),
+            ));
+        }
+    };
+    let mut parts = Vec::new();
+    let mut has_id = false;
+    for (field, direction) in fields {
+        let expression = if let Some(path) = field.strip_prefix("data.") {
+            validate_projection_path(path, "sort")?;
+            format!("json_extract(data, '$.{}')", path.replace('\'', "''"))
+        } else if field != "json(data)"
+            && identity_user_select().split(',').any(|column| column.trim() == field)
+        {
+            has_id |= field == "id";
+            field
+        } else {
+            return Err(AppError::BadRequest(format!("unsupported user_query sort field: {field}")));
+        };
+        parts.push(format!("{expression} {direction}"));
+    }
+    if !has_id {
+        parts.push("id DESC".to_string());
+    }
+    Ok(parts.join(", "))
+}
+
 async fn user_get_details(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = if let Some(user_id) = clean_optional(payload.user_id).or(payload.id) {
+    let user_id = if let Some(user_id) = user_id_text(payload.user_id, "user_id")?.or(payload.id) {
         user_id
     } else if let Some(email) = clean_optional(payload.email) {
         user_id_by_field(conn, "email", &email).await?
@@ -329,7 +369,7 @@ async fn user_update(
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let user_id = required_text(user_id_text(payload.user_id, "user_id")?.or(payload.id), "user_id")?;
     let mut current = fetch_identity_user(conn, &user_id).await?;
     let email = clean_optional(payload.email);
     let username = clean_optional(payload.username);
@@ -397,7 +437,7 @@ async fn user_update_password(
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let user_id = required_text(user_id_text(payload.user_id, "user_id")?.or(payload.id), "user_id")?;
     let password_hash = required_text(payload.password_hash, "password_hash")?;
     let password_algo = required_text(payload.password_algo, "password_algo")?;
     let requires_password_change = payload.requires_password_change;
@@ -443,7 +483,7 @@ async fn user_update_password(
 
 async fn user_update_status(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let user_id = required_text(user_id_text(payload.user_id, "user_id")?.or(payload.id), "user_id")?;
     let status = required_text(payload.status, "status")?;
     let expires_at = normalize_future_time(payload.status_expires_at, payload.status_expires_in, "status")?;
     let status_next = clean_optional(payload.status_next);
@@ -494,7 +534,7 @@ async fn user_update_status(conn: &libsql::Connection, req: GatewayRequest) -> A
 
 async fn user_delete(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let user_id = required_text(user_id_text(payload.user_id, "user_id")?.or(payload.id), "user_id")?;
     let purge = payload.purge.unwrap_or(false);
     let tx = conn
         .transaction()
@@ -568,7 +608,7 @@ async fn user_link_provider(
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let user_id = required_text(user_id_text(payload.user_id, "user_id")?.or(payload.id), "user_id")?;
     let provider = required_text(payload.provider, "provider")?;
     let provider_user_id = required_text(payload.provider_user_id, "provider_user_id")?;
     let email = clean_optional(payload.email);
@@ -606,7 +646,7 @@ async fn user_unlink_provider(
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = clean_optional(payload.user_id.or(payload.id));
+    let user_id = clean_optional(user_id_text(payload.user_id, "user_id")?.or(payload.id));
     let provider = required_text(payload.provider, "provider")?;
     let provider_user_id = required_text(payload.provider_user_id, "provider_user_id")?;
     let mut rows = conn
@@ -725,7 +765,7 @@ async fn user_create_token(
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
     let payload = req.payload;
-    let user_id = required_text(payload.user_id.or(payload.id), "user_id")?;
+    let user_id = required_text(user_id_text(payload.user_id, "user_id")?.or(payload.id), "user_id")?;
     let kind = required_text(payload.kind, "kind")?;
     let token_hash = required_text(payload.token_hash, "token_hash")?;
     let expires_at = normalize_future_time(payload.expires_at, payload.expires_in, "token")?;
@@ -892,7 +932,7 @@ async fn user_revoke_token(
     let payload = req.payload;
     let token_id = clean_optional(payload.token_id.or(payload.id));
     let token_hash = clean_optional(payload.token_hash);
-    let user_id = clean_optional(payload.user_id);
+    let user_id = clean_optional(user_id_text(payload.user_id, "user_id")?);
     let selector_count = usize::from(token_id.is_some())
         + usize::from(token_hash.is_some())
         + usize::from(user_id.is_some());
@@ -1316,6 +1356,16 @@ fn normalize_optional_id(id: Option<String>) -> AppResult<Option<String>> {
     Ok(clean_optional(id))
 }
 
+fn user_id_text(value: Option<Value>, name: &str) -> AppResult<Option<String>> {
+    match value {
+        None => Ok(None),
+        Some(Value::String(value)) => Ok(clean_optional(Some(value))),
+        Some(_) => Err(AppError::BadRequest(format!(
+            "{name} must be a string for this operation"
+        ))),
+    }
+}
+
 fn required_text(value: Option<String>, name: &str) -> AppResult<String> {
     clean_optional(value).ok_or_else(|| AppError::BadRequest(format!("{name} is required")))
 }
@@ -1334,13 +1384,55 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod identity_id_tests {
-    use super::{normalize_optional_id, user_get};
+    use super::{identity_user_order_by, normalize_optional_id, user_get, user_query};
     use crate::{
         api::dto::{GatewayRequest, OperationPayload},
         storage::schema::init_schema_with_retry,
     };
     use libsql::Builder;
     use uuid::Uuid;
+
+    #[test]
+    fn user_sort_validates_fields_and_preserves_priority() {
+        use serde_json::json;
+        assert_eq!(identity_user_order_by(None).unwrap(), "created_at DESC, id DESC");
+        assert_eq!(identity_user_order_by(Some(&json!("last_login_at desc, email"))).unwrap(), "last_login_at DESC, email ASC, id DESC");
+        assert_eq!(identity_user_order_by(Some(&json!({"id": 1}))).unwrap(), "id ASC");
+        for value in [json!("password_hash"), json!("email sideways"), json!("email, "), json!("data.x'); DROP TABLE users; --"), json!({}), json!(false)] {
+            assert!(identity_user_order_by(Some(&value)).is_err(), "accepted {value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn user_query_sorts_before_paginating_with_stable_ties() {
+        use serde_json::json;
+        let db = Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        init_schema_with_retry(&conn, false).await.unwrap();
+        for (id, email, score) in [("a", "z@example.com", 10), ("b", "b@example.com", 20), ("c", "a@example.com", 30)] {
+            conn.execute(
+                "INSERT INTO __kdb_identity_users (id, email, data) VALUES (?, ?, json(?))",
+                libsql::params![id, email, json!({"score": score}).to_string()],
+            ).await.unwrap();
+        }
+        for (sort, page, expected) in [("data.score desc", 1, "c"), ("data.score desc", 2, "b"), ("first_name", 1, "c"), ("id asc", 1, "a")] {
+            let response = user_query(&conn, GatewayRequest {
+                db: None,
+                operation: "user_query".to_string(),
+                namespace: None,
+                payload: OperationPayload {
+                    sort: Some(json!(sort)),
+                    page: Some(page),
+                    per_page: Some(1),
+                    ..Default::default()
+                },
+            }).await.unwrap();
+            let data = response.data.unwrap();
+            assert_eq!(data["items"][0]["id"], expected);
+            assert_eq!(data["total_items"], 3);
+            assert_eq!(data["pagination"]["page"], page);
+        }
+    }
 
     #[test]
     fn identity_ids_accept_and_preserve_custom_values() {

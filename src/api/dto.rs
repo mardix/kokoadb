@@ -51,7 +51,7 @@ pub struct OperationPayload {
     pub value: Option<String>,
     pub event: Option<String>,
     pub events: Option<Vec<Value>>,
-    pub user_id: Option<String>,
+    pub user_id: Option<Value>,
     #[serde(rename = "_user_id")]
     pub document_user_id: Option<String>,
     pub attach_users: Option<bool>,

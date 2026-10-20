@@ -19,13 +19,10 @@ async fn count(
     }
     let source = resolve_source(&payload);
     let collection = resolve_collection_scope(&payload)?;
+    let user_scope = document_user_scope(&payload)?;
     let (mut where_clause, mut bind_values) =
         build_where_with_collection(payload.filter.unwrap_or_else(|| json!({})), collection)?;
-    apply_document_user_scope(
-        &mut where_clause,
-        &mut bind_values,
-        clean_optional(payload.document_user_id.clone()),
-    );
+    apply_document_user_scope(&mut where_clause, &mut bind_values, user_scope)?;
 
     let sql = format!("SELECT COUNT(*) FROM {source} WHERE {where_clause}");
     let mut rows = conn
@@ -171,9 +168,15 @@ async fn aggregate(
 
     let source = resolve_source(&payload);
     let collection = resolve_collection_scope(&payload)?;
-    let (where_clause, bind_values) = build_where_with_collection(
+    let user_scope = document_user_scope(&payload)?;
+    let (mut where_clause, mut bind_values) = build_where_with_collection(
         payload.filter.clone().unwrap_or_else(|| json!({})),
         collection.clone(),
+    )?;
+    apply_document_user_scope(
+        &mut where_clause,
+        &mut bind_values,
+        user_scope.clone(),
     )?;
     let compute_spec = payload
         .compute
@@ -192,6 +195,7 @@ async fn aggregate(
         compute_spec,
         payload.filter.clone(),
         collection.clone(),
+        user_scope,
     )
     .await?;
     let matched_count = execute_count(conn, source, &where_clause, bind_values).await?;
@@ -248,6 +252,7 @@ async fn execute_query_inner(
         let _ = bump_query_heatmap(conn, &observed_paths).await;
     }
     let source = resolve_source(&payload);
+    let user_scope = document_user_scope(&payload)?;
     let explicit_ids = explicit_ids_from_query_filter(payload.filter.as_ref())?;
     let allow_pending =
         explicit_ids.is_some() && !payload.force_db.unwrap_or(false) && source == "__kdb_documents";
@@ -268,8 +273,8 @@ async fn execute_query_inner(
     apply_document_user_scope(
         &mut where_clause,
         &mut bind_values,
-        clean_optional(payload.document_user_id.clone()),
-    );
+        user_scope.clone(),
+    )?;
 
     if payload.explain.unwrap_or(false) {
         return Ok(json!({
@@ -367,7 +372,12 @@ async fn execute_query_inner(
             .expect("allow_pending requires explicit ids")
         {
             if let Some(candidate) = state.get_pending_document(db_path, id) {
-                if pending_matches_read_scope(&candidate.collection, &namespace_scope) {
+                if pending_matches_read_scope(&candidate.collection, &namespace_scope)
+                    && document_user_scope_matches(
+                        user_scope.as_ref(),
+                        candidate.document.get("_user_id").and_then(Value::as_str),
+                    )?
+                {
                     let mut item = candidate.document;
                     if !include_metadata {
                         if let Some(object) = item.as_object_mut() {
@@ -757,8 +767,8 @@ async fn execute_query_fts(
     apply_document_user_scope(
         &mut where_clause,
         &mut where_binds,
-        clean_optional(payload.document_user_id.clone()),
-    );
+        document_user_scope(&payload)?,
+    )?;
 
     let mut count_binds = Vec::<libsql::Value>::with_capacity(1 + where_binds.len());
     count_binds.push(libsql::Value::Text(query_text.clone()));

@@ -1322,10 +1322,15 @@ fn prepare_update_document(
     })
 }
 
-fn normalize_document_update_user_id(user_id: Option<String>) -> AppResult<Option<String>> {
+fn normalize_document_update_user_id(user_id: Option<Value>) -> AppResult<Option<String>> {
     let Some(user_id) = user_id else {
         return Ok(None);
     };
+    let user_id = user_id.as_str().ok_or_else(|| {
+        AppError::BadRequest(
+            "user_id must be a string when assigning document ownership".to_string(),
+        )
+    })?;
     let user_id = user_id.trim();
     if user_id.is_empty() {
         return Err(AppError::BadRequest(

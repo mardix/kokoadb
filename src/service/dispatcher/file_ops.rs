@@ -76,6 +76,7 @@ async fn file_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<G
 
 async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
     let payload = req.payload;
+    let order_by = file_order_by(payload.sort.as_ref())?;
     let (limit, offset, page) = resolve_pagination_args(&payload, 25)?;
     let limit = limit.clamp(1, 200);
     let requested_status = clean_optional(payload.status);
@@ -161,7 +162,7 @@ async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
             &format!(
                 "SELECT {} FROM __kdb_files
                  WHERE {where_clause}
-                 ORDER BY uploaded_at DESC, created_at DESC, id DESC
+                 ORDER BY {order_by}
                  LIMIT ? OFFSET ?",
                 file_select()
             ),
@@ -188,6 +189,46 @@ async fn file_query(conn: &libsql::Connection, req: GatewayRequest) -> AppResult
         "prev_offset": prev_offset,
         "pagination": build_pagination(total_items, items.len(), limit, page, offset)
     }))))
+}
+
+fn file_order_by(sort: Option<&Value>) -> AppResult<String> {
+    let Some(sort) = sort else {
+        return Ok("uploaded_at DESC, created_at DESC, id DESC".to_string());
+    };
+    let fields = match sort {
+        Value::String(value) => parse_sort_string(value)?,
+        Value::Object(values) if !values.is_empty() => values
+            .iter()
+            .map(|(field, direction)| Ok((field.clone(), parse_sort_dir(direction)?)))
+            .collect::<AppResult<Vec<_>>>()?,
+        _ => {
+            return Err(AppError::BadRequest(
+                "file_query sort must be a non-empty string or object".to_string(),
+            ));
+        }
+    };
+    let mut parts = Vec::new();
+    let mut has_id = false;
+    for (field, direction) in fields {
+        let expression = if let Some(path) = field.strip_prefix("metadata.") {
+            validate_projection_path(path, "sort")?;
+            format!("json_extract(metadata, '$.{}')", path.replace('\'', "''"))
+        } else if field != "json(metadata)"
+            && file_select().split(',').any(|column| column.trim() == field)
+        {
+            has_id |= field == "id";
+            field
+        } else {
+            return Err(AppError::BadRequest(format!(
+                "unsupported file_query sort field: {field}"
+            )));
+        };
+        parts.push(format!("{expression} {direction}"));
+    }
+    if !has_id {
+        parts.push("id DESC".to_string());
+    }
+    Ok(parts.join(", "))
 }
 
 async fn file_update(
@@ -395,7 +436,67 @@ fn normalize_optional_file_id(id: Option<String>) -> AppResult<Option<String>> {
 
 #[cfg(test)]
 mod file_id_tests {
-    use super::normalize_optional_file_id;
+    use super::{file_order_by, file_query, normalize_optional_file_id};
+    use crate::{
+        api::dto::{GatewayRequest, OperationPayload},
+        storage::schema::init_schema_with_retry,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn file_sort_validates_fields_and_preserves_priority() {
+        assert_eq!(file_order_by(None).unwrap(), "uploaded_at DESC, created_at DESC, id DESC");
+        assert_eq!(file_order_by(Some(&json!("size_bytes desc, filename"))).unwrap(), "size_bytes DESC, filename ASC, id DESC");
+        assert_eq!(file_order_by(Some(&json!({"id": 1}))).unwrap(), "id ASC");
+        for value in [json!("unknown"), json!("filename sideways"), json!("filename,"), json!("metadata..rank"), json!("json(metadata)"), json!({}), json!(false)] {
+            assert!(file_order_by(Some(&value)).is_err(), "accepted {value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn file_query_sorts_filtered_rows_before_pagination() {
+        let db = libsql::Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        init_schema_with_retry(&conn, false).await.unwrap();
+        for (id, owner, filename, size, rank) in [
+            ("a", "owner-1", "z.png", 10, 30),
+            ("b", "owner-1", "b.png", 20, 20),
+            ("c", "owner-1", "a.png", 20, 10),
+            ("d", "owner-2", "d.png", 100, 100),
+        ] {
+            conn.execute(
+                "INSERT INTO __kdb_files (id, storage_backend, storage_path, owner_id, filename, size_bytes, metadata, uploaded_at)
+                 VALUES (?, 'local', ?, ?, ?, ?, json(?), '2026-01-01T00:00:00Z')",
+                libsql::params![id, format!("/files/{id}"), owner, filename, size, json!({"nested": {"rank": rank}, "x'); --": rank}).to_string()],
+            ).await.unwrap();
+        }
+        for (sort, page, expected) in [
+            (None, 1, "c"),
+            (Some(json!("size_bytes desc")), 1, "c"),
+            (Some(json!("size_bytes desc")), 2, "b"),
+            (Some(json!("size_bytes desc, filename desc")), 1, "b"),
+            (Some(json!("metadata.nested.rank desc")), 1, "a"),
+            (Some(json!({"metadata.x'); --": -1})), 1, "a"),
+            (Some(json!({"id": 1})), 1, "a"),
+        ] {
+            let response = file_query(&conn, GatewayRequest {
+                db: None,
+                operation: "file_query".to_string(),
+                namespace: None,
+                payload: OperationPayload {
+                    sort,
+                    owner_id: Some("owner-1".to_string()),
+                    page: Some(page),
+                    per_page: Some(1),
+                    ..Default::default()
+                },
+            }).await.unwrap();
+            let data = response.data.unwrap();
+            assert_eq!(data["items"][0]["id"], expected);
+            assert_eq!(data["total_items"], 3);
+            assert_eq!(data["pagination"]["page"], page);
+        }
+    }
 
     #[test]
     fn file_ids_accept_and_preserve_custom_values() {

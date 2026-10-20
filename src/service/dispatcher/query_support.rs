@@ -20,11 +20,189 @@ fn build_where_with_collection(
 fn apply_document_user_scope(
     where_clause: &mut String,
     bind_values: &mut Vec<libsql::Value>,
-    user_id: Option<String>,
-) {
-    if let Some(user_id) = user_id {
-        *where_clause = format!("_user_id = ? AND ({where_clause})");
-        bind_values.insert(0, libsql::Value::Text(user_id));
+    selector: Option<Value>,
+) -> AppResult<()> {
+    let Some(selector) = selector else {
+        return Ok(());
+    };
+    let (scope_sql, mut scope_binds) = compile_document_user_scope(selector)?;
+    *where_clause = format!("{scope_sql} AND ({where_clause})");
+    scope_binds.append(bind_values);
+    *bind_values = scope_binds;
+    Ok(())
+}
+
+fn document_user_scope(payload: &OperationPayload) -> AppResult<Option<Value>> {
+    if payload.user_id.is_some() && payload.document_user_id.is_some() {
+        return Err(AppError::BadRequest(
+            "user_id and _user_id cannot both be provided".to_string(),
+        ));
+    }
+    Ok(payload.user_id.clone().or_else(|| {
+        payload
+            .document_user_id
+            .clone()
+            .map(Value::String)
+    }))
+}
+
+fn compile_document_user_scope(selector: Value) -> AppResult<(String, Vec<libsql::Value>)> {
+    match selector {
+        Value::String(value) => {
+            let value = normalize_user_scope_id(value)?;
+            Ok(("_user_id = ?".to_string(), vec![libsql::Value::Text(value)]))
+        }
+        Value::Array(values) => compile_document_user_list("$in", values),
+        Value::Object(operators) if operators.len() == 1 => {
+            let (operator, operand) = operators
+                .into_iter()
+                .next()
+                .ok_or_else(|| AppError::BadRequest("user_id operator is required".to_string()))?;
+            match operator.as_str() {
+                "$eq" | "$ne" => {
+                    let value = operand.as_str().ok_or_else(|| {
+                        AppError::BadRequest(format!("user_id.{operator} must be a string"))
+                    })?;
+                    let value = normalize_user_scope_id(value.to_string())?;
+                    let sql = if operator == "$eq" {
+                        "_user_id = ?"
+                    } else {
+                        "(_user_id IS NULL OR _user_id <> ?)"
+                    };
+                    Ok((sql.to_string(), vec![libsql::Value::Text(value)]))
+                }
+                "$in" | "$nin" => {
+                    let values = operand.as_array().cloned().ok_or_else(|| {
+                        AppError::BadRequest(format!("user_id.{operator} must be an array"))
+                    })?;
+                    compile_document_user_list(&operator, values)
+                }
+                "$exists" => {
+                    let exists = operand.as_bool().ok_or_else(|| {
+                        AppError::BadRequest("user_id.$exists must be a boolean".to_string())
+                    })?;
+                    Ok((
+                        if exists {
+                            "_user_id IS NOT NULL"
+                        } else {
+                            "_user_id IS NULL"
+                        }
+                        .to_string(),
+                        vec![],
+                    ))
+                }
+                _ => Err(AppError::BadRequest(
+                    "user_id supports only $eq, $ne, $in, $nin, or $exists".to_string(),
+                )),
+            }
+        }
+        Value::Object(_) => Err(AppError::BadRequest(
+            "user_id operator object must contain exactly one operator".to_string(),
+        )),
+        _ => Err(AppError::BadRequest(
+            "user_id must be a string, string array, or operator object".to_string(),
+        )),
+    }
+}
+
+fn compile_document_user_list(
+    operator: &str,
+    values: Vec<Value>,
+) -> AppResult<(String, Vec<libsql::Value>)> {
+    if values.is_empty() {
+        return Err(AppError::BadRequest(format!(
+            "user_id.{operator} cannot be empty"
+        )));
+    }
+    let mut seen = HashSet::<String>::new();
+    let mut ids = Vec::<String>::new();
+    for value in values {
+        let value = value.as_str().ok_or_else(|| {
+            AppError::BadRequest(format!("user_id.{operator} values must be strings"))
+        })?;
+        let value = normalize_user_scope_id(value.to_string())?;
+        if seen.insert(value.clone()) {
+            ids.push(value);
+        }
+    }
+    let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(", ");
+    let sql = if operator == "$in" {
+        format!("_user_id IN ({placeholders})")
+    } else {
+        format!("(_user_id IS NULL OR _user_id NOT IN ({placeholders}))")
+    };
+    Ok((
+        sql,
+        ids.into_iter().map(libsql::Value::Text).collect(),
+    ))
+}
+
+fn normalize_user_scope_id(value: String) -> AppResult<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::BadRequest(
+            "user_id values cannot be empty".to_string(),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn document_user_scope_matches(selector: Option<&Value>, user_id: Option<&str>) -> AppResult<bool> {
+    let Some(selector) = selector else {
+        return Ok(true);
+    };
+    match selector {
+        Value::String(expected) => Ok(user_id == Some(normalize_user_scope_id(expected.clone())?.as_str())),
+        Value::Array(values) => {
+            let (_, binds) = compile_document_user_list("$in", values.clone())?;
+            Ok(user_id.is_some_and(|actual| {
+                binds.iter().any(|value| matches!(value, libsql::Value::Text(expected) if expected == actual))
+            }))
+        }
+        Value::Object(operators) if operators.len() == 1 => {
+            let (operator, operand) = operators.iter().next().ok_or_else(|| {
+                AppError::BadRequest("user_id operator is required".to_string())
+            })?;
+            match operator.as_str() {
+                "$eq" => {
+                    let expected = operand.as_str().ok_or_else(|| {
+                        AppError::BadRequest("user_id.$eq must be a string".to_string())
+                    })?;
+                    Ok(user_id == Some(normalize_user_scope_id(expected.to_string())?.as_str()))
+                }
+                "$ne" => {
+                    let expected = operand.as_str().ok_or_else(|| {
+                        AppError::BadRequest("user_id.$ne must be a string".to_string())
+                    })?;
+                    Ok(user_id != Some(normalize_user_scope_id(expected.to_string())?.as_str()))
+                }
+                "$in" | "$nin" => {
+                    let values = operand.as_array().cloned().ok_or_else(|| {
+                        AppError::BadRequest(format!("user_id.{operator} must be an array"))
+                    })?;
+                    let (_, binds) = compile_document_user_list(operator, values)?;
+                    let contains = user_id.is_some_and(|actual| {
+                        binds.iter().any(|value| matches!(value, libsql::Value::Text(expected) if expected == actual))
+                    });
+                    Ok(if operator == "$in" { contains } else { !contains })
+                }
+                "$exists" => {
+                    let expected = operand.as_bool().ok_or_else(|| {
+                        AppError::BadRequest("user_id.$exists must be a boolean".to_string())
+                    })?;
+                    Ok(user_id.is_some() == expected)
+                }
+                _ => Err(AppError::BadRequest(
+                    "user_id supports only $eq, $ne, $in, $nin, or $exists".to_string(),
+                )),
+            }
+        }
+        Value::Object(_) => Err(AppError::BadRequest(
+            "user_id operator object must contain exactly one operator".to_string(),
+        )),
+        _ => Err(AppError::BadRequest(
+            "user_id must be a string, string array, or operator object".to_string(),
+        )),
     }
 }
 
@@ -61,6 +239,7 @@ async fn run_aggregations_sql(
     spec: Value,
     base_filter: Option<Value>,
     collection: Option<String>,
+    user_scope: Option<Value>,
 ) -> AppResult<Value> {
     let spec_obj = spec
         .as_object()
@@ -73,10 +252,11 @@ async fn run_aggregations_sql(
     for (name, def) in spec_obj {
         let metric = parse_compute_metric(def)?;
         let metric_filter = combine_filters(base_filter.clone(), metric.filter.clone());
-        let (where_clause, binds) = build_where_with_collection(
+        let (mut where_clause, mut binds) = build_where_with_collection(
             metric_filter.unwrap_or_else(|| json!({})),
             collection.clone(),
         )?;
+        apply_document_user_scope(&mut where_clause, &mut binds, user_scope.clone())?;
         if metric.op == "$distinct" {
             let path = expect_agg_path(metric.op.as_str(), &metric.arg)?;
             let docs = fetch_docs_for_compute(conn, source, &where_clause, binds).await?;
@@ -991,4 +1171,87 @@ fn parse_sort_string(input: &str) -> AppResult<Vec<(String, &'static str)>> {
         out.push((path.to_string(), direction));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod document_user_scope_tests {
+    use super::{
+        apply_document_user_scope, compile_document_user_scope, document_user_scope,
+        document_user_scope_matches,
+    };
+    use crate::api::dto::OperationPayload;
+    use serde_json::json;
+
+    #[test]
+    fn scalar_and_array_user_scopes_compile_with_stable_bind_order() {
+        let (sql, binds) = compile_document_user_scope(json!(["user-1", "user-2", "user-1"]))
+            .expect("array selector should compile");
+        assert_eq!(sql, "_user_id IN (?, ?)");
+        assert_eq!(binds.len(), 2);
+        assert!(matches!(&binds[0], libsql::Value::Text(value) if value == "user-1"));
+        assert!(matches!(&binds[1], libsql::Value::Text(value) if value == "user-2"));
+
+        let mut where_clause = "collection = ?".to_string();
+        let mut query_binds = vec![libsql::Value::Text("orders".to_string())];
+        apply_document_user_scope(
+            &mut where_clause,
+            &mut query_binds,
+            Some(json!("user-3")),
+        )
+        .expect("scalar selector should apply");
+        assert_eq!(where_clause, "_user_id = ? AND (collection = ?)");
+        assert!(matches!(&query_binds[0], libsql::Value::Text(value) if value == "user-3"));
+        assert!(matches!(&query_binds[1], libsql::Value::Text(value) if value == "orders"));
+    }
+
+    #[test]
+    fn exclusion_and_existence_scopes_are_null_aware() {
+        let (sql, binds) = compile_document_user_scope(json!({"$nin": ["user-1", "user-2"]}))
+            .expect("$nin should compile");
+        assert_eq!(sql, "(_user_id IS NULL OR _user_id NOT IN (?, ?))");
+        assert_eq!(binds.len(), 2);
+
+        let (sql, binds) = compile_document_user_scope(json!({"$ne": "user-1"}))
+            .expect("$ne should compile");
+        assert_eq!(sql, "(_user_id IS NULL OR _user_id <> ?)");
+        assert_eq!(binds.len(), 1);
+
+        let (sql, binds) = compile_document_user_scope(json!({"$exists": false}))
+            .expect("$exists should compile");
+        assert_eq!(sql, "_user_id IS NULL");
+        assert!(binds.is_empty());
+
+        assert!(document_user_scope_matches(Some(&json!({"$nin": ["user-1"]})), None)
+            .expect("unowned pending document should match $nin"));
+        assert!(!document_user_scope_matches(
+            Some(&json!({"$nin": ["user-1"]})),
+            Some("user-1")
+        )
+        .expect("excluded pending document should not match"));
+        assert!(document_user_scope_matches(
+            Some(&json!({"$exists": true})),
+            Some("user-2")
+        )
+        .expect("owned pending document should match $exists"));
+    }
+
+    #[test]
+    fn invalid_user_scopes_and_conflicting_names_are_rejected() {
+        for selector in [
+            json!([]),
+            json!({"$in": []}),
+            json!({"$eq": ["user-1"]}),
+            json!({"$eq": "user-1", "$ne": "user-2"}),
+            json!({"$unknown": "user-1"}),
+        ] {
+            assert!(compile_document_user_scope(selector).is_err());
+        }
+
+        let payload = OperationPayload {
+            user_id: Some(json!("user-1")),
+            document_user_id: Some("legacy-user".to_string()),
+            ..Default::default()
+        };
+        assert!(document_user_scope(&payload).is_err());
+    }
 }

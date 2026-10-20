@@ -1486,7 +1486,7 @@ Returns only the number of documents matched by namespace, filter, user scope, a
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `filter` | object | `{}` | Filter conditions. |
-| `_user_id` | string | — | Restricts to the document-table user reference. |
+| `user_id` | string \| string[] \| operator object | — | Restricts by the document-table `_user_id` column. Arrays are `$in` shorthand. Supports `$eq`, `$ne`, `$in`, `$nin`, and `$exists`. |
 | `scope` | string | `namespace` | `namespace` requires a selected namespace; `all` counts across namespaces. `namespace: "*"` normalizes to `all`. |
 | `include_archive` | bool | `false` | Counts live and archived together. |
 | `archive_only` | bool | `false` | Counts archived only. |
@@ -1533,7 +1533,7 @@ Reach for `query` when you need document bodies, pagination, sorting, field proj
 |---|---|---|---|
 | `filter` | object | `{}` | Filter expression. Use `_id`, `_id.$eq`, or `_id.$in` for direct id retrieval. |
 | `search` | string | — | Enables FTS5 over live documents. Alias `q`. |
-| `_user_id` | string | — | Restricts documents by their external user reference column. |
+| `user_id` | string \| string[] \| operator object | — | Restricts by the document-table `_user_id` column. Arrays are `$in` shorthand. Supports `$eq`, `$ne`, `$in`, `$nin`, and `$exists`. |
 | `sort` | string \| object | `_created_at DESC` | Ordered fields. String form supports comma-separated `path ASC\|DESC`; missing direction means ascending. Dot paths supported. |
 | `limit` | int | `KOKOADB_QUERY_DEFAULT_LIMIT` | Page size for offset mode. |
 | `offset` | int | `0` | Zero-based row offset. |
@@ -1553,6 +1553,35 @@ Reach for `query` when you need document bodies, pagination, sorting, field proj
 | `force_db` | bool | `false` | For exact `_id`/`_id.$in` reads, bypasses accepted-write pending state. |
 | `explain` | bool | `false` | Returns generated WHERE SQL, bind count, and source instead of documents. |
 | `cache` | bool \| int | Configured | See [read caching](#read-caching). |
+
+#### Filter by document owner
+
+`user_id` is a request selector mapped to the physical `_user_id` document column. Returned documents continue to expose the value as `_user_id`. Keep this selector outside `filter`, because `filter` targets fields inside document JSON.
+
+```json
+{
+  "operation": "query",
+  "db": "myapp/main",
+  "namespace": "orders",
+  "payload": {
+    "user_id": ["user-1", "user-2"],
+    "filter": {"status": "active"}
+  }
+}
+```
+
+| Selector | Meaning |
+|---|---|
+| `"user-1"` | Equals one user. |
+| `["user-1","user-2"]` | Matches any listed user; shorthand for `$in`. |
+| `{"$eq":"user-1"}` | Equals one user explicitly. |
+| `{"$ne":"user-1"}` | Excludes one user and includes documents with no assigned user. |
+| `{"$in":["user-1","user-2"]}` | Matches any listed user. |
+| `{"$nin":["user-1","user-2"]}` | Excludes listed users and includes documents with no assigned user. |
+| `{"$exists":true}` | Matches documents with an assigned user. |
+| `{"$exists":false}` | Matches documents where `_user_id` is null. |
+
+Operator objects must contain exactly one operator. Empty strings, empty arrays, and non-string list elements are rejected. Repeated array values are deduplicated. The same selector works with `count`, `aggregate`, and FTS through `query.search`.
 
 #### Filter, sort, projection, pagination
 
@@ -1823,6 +1852,7 @@ Computes set-level values over all documents matched by a namespace and filter. 
 |---|---|---|---|
 | `compute` | object | **Required** | Named aggregate expressions using `$count`, `$sum`, `$avg`, `$min`, `$max`, `$distinct`. |
 | `filter` | object | `{}` | Applied before aggregation. |
+| `user_id` | string \| string[] \| operator object | — | Restricts the aggregate set by document owner using the same selector forms as `query`. |
 | `scope` | string | `namespace` | One namespace, or `all` / `namespace: "*"`. |
 | `include_archive` | bool | `false` | Aggregates live and archived. |
 | `archive_only` | bool | `false` | Aggregates archived only. |
@@ -4123,7 +4153,24 @@ This updates `password_updated_at`, may set or clear `requires_password_change`,
 
 Lists and queries users with pagination.
 
-**Optional:** `search` or `q` (matches id, email, username, phone), `status`, `email`, `username`, `filter`, `page`, `per_page`, `limit`, `offset`.
+**Optional:** `search` or `q` (matches id, email, username, phone), `status`, `email`, `username`, `filter`, `sort`, `page`, `per_page`, `limit`, `offset`.
+
+`sort` accepts a comma-separated string such as `"last_login_at desc, email asc"`. Omitted directions default to ascending. An object such as `{"created_at": -1}` is also accepted. String form explicitly preserves multi-field priority. Sortable columns are `id`, `email`, `username`, `phone`, `first_name`, `last_name`, `profile_photo`, `status`, `status_reason`, `status_changed_at`, `status_expires_at`, `status_next`, `status_next_reason`, `status_changed_by`, `password_algo`, `password_updated_at`, `requires_password_change`, `email_verified_at`, `phone_verified_at`, `last_login_at`, `created_at`, `updated_at`, and `deleted_at`. Application fields use `data.*` dot paths. Unsupported fields and invalid syntax are rejected. Default order is `created_at DESC, id DESC`; custom sorting appends `id DESC` unless `id` is explicitly sorted, giving tied rows a stable order. Pagination uses offsets and is not a snapshot across requests.
+
+```json
+{
+  "db": "app/main",
+  "operation": "user_query",
+  "payload": {
+    "status": "active",
+    "sort": "last_login_at desc, email asc",
+    "page": 1,
+    "per_page": 25
+  }
+}
+```
+
+For application data, use `"sort": "data.score desc, first_name"`.
 
 > The `filter` object queries application-defined data under `data`. **Every field path must begin with `data.`** It supports the same logical, comparison, membership, array, string, existence, and type [filter operators](#filter-operators) as documents. Dedicated columns use the top-level shortcuts instead.
 
@@ -4355,7 +4402,28 @@ Returns `item: null` when the id does not exist or was soft-deleted.
 
 ### `file_query`
 
-**Optional:** `bucket`, `status`, `owner_type`, `owner_id`, `storage_backend`, `content_type`, `search` or `q`, `filter`, `page`, `per_page`, `limit`, `offset`.
+**Optional:** `bucket`, `status`, `owner_type`, `owner_id`, `storage_backend`, `content_type`, `search` or `q`, `filter`, `sort`, `page`, `per_page`, `limit`, `offset`.
+
+`sort` accepts a comma-separated string such as `"size_bytes desc, filename asc"`; omitted directions default to ascending. Object form is also supported, e.g. `{"uploaded_at": -1}`. Use string form to explicitly preserve multi-field priority. Sortable columns are `id`, `bucket`, `storage_backend`, `storage_path`, `filename`, `content_type`, `size_bytes`, `sha256`, `status`, `owner_type`, `owner_id`, `uploaded_at`, `created_at`, `updated_at`, `deleted_at`, and `expires_at`. Nested application fields use `metadata.*` paths. Invalid fields, directions, and empty sorts are rejected.
+
+When omitted, the order remains `uploaded_at DESC, created_at DESC, id DESC`. Custom sorts append `id DESC` unless `id` is explicitly supplied, keeping tied rows in a stable order. Sorting happens before pagination. Offset pagination does not provide a snapshot across requests.
+
+List an owner's files, largest first:
+
+```json
+{
+  "db": "app/main",
+  "operation": "file_query",
+  "payload": {
+    "owner_id": "u123",
+    "sort": "size_bytes desc, filename asc",
+    "page": 1,
+    "per_page": 25
+  }
+}
+```
+
+For nested metadata, use e.g. `"sort": "metadata.image.width desc, uploaded_at desc"`.
 
 Only visible, non-deleted records are queried. Rows with `deleted_at` set or `status=deleted` are excluded even when the request supplies another status/filter combination.
 
