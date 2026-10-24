@@ -23,6 +23,7 @@ pub struct KongodbConfig {
     pub mutation: MutationConfig,
     pub write_queue: WriteQueueConfig,
     pub runtime: RuntimeConfig,
+    pub identity_create_max_batch: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -436,6 +437,9 @@ impl KongodbConfig {
             system_catalog: SystemCatalogConfig {
                 retention_days: env_u64("KOKOADB_SYSTEM_RETENTION_DAYS").unwrap_or(14),
             },
+            identity_create_max_batch: env_usize("KOKOADB_IDENTITY_CREATE_MAX_BATCH")
+                .unwrap_or(500)
+                .max(1),
             mutation: MutationConfig {
                 strict_mutation_operators: env_bool("KOKOADB_STRICT_MUTATIONS_OPERATORS")
                     .unwrap_or(false),

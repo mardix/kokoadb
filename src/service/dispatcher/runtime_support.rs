@@ -644,7 +644,6 @@ fn supports_accepted_ack(operation: &str) -> bool {
             | "vacuum_db"
             | "recompute_stats"
             | "snapshot_db_stats"
-            | "user_create"
             | "user_update"
             | "user_update_password"
             | "user_update_status"
@@ -995,6 +994,14 @@ fn validate_accepted_preflight(req: &GatewayRequest) -> AppResult<()> {
 fn prepare_accepted_ack_preview(req: &mut GatewayRequest) -> AppResult<Value> {
     let mut ids = Vec::<String>::new();
     match req.operation.as_str() {
+        "user_create" => {
+            if let Some(users) = req.payload.users.as_ref() {
+                ids.extend(users.iter().filter_map(|user| user.get("user_id").and_then(Value::as_str).map(str::to_string)));
+            } else if let Some(id) = user_id_text(req.payload.user_id.as_ref(), "user_id")? {
+                ids.push(id);
+            }
+            return Ok(json!({"count": ids.len(), "ids": ids, "queued": true}));
+        }
         "insert" => {
             let data = req
                 .payload

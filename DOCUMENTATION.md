@@ -774,6 +774,7 @@ Every reusable `payload` key. Operation sections remain authoritative where a fi
 | Field | Type | Description |
 |---|---|---|
 | `email`, `username`, `phone` | string | User selectors / attributes. |
+| `users` | object[] | Batch `user_create` items; exclusive with single-user payload fields. Maximum set by `KOKOADB_IDENTITY_CREATE_MAX_BATCH` (default 500). |
 | `first_name`, `last_name`, `profile_photo` | string | First-class profile columns. |
 | `provider` / `provider_user_id` | string | External provider name and stable external id. |
 | `password_hash` / `password_algo` | string | App-generated hash and algorithm label. Kokoadb never stores raw passwords. |
@@ -852,7 +853,7 @@ Find the operation by task; the reference follows in the same order.
 | [`metrics_ingest`](#metrics_ingest) | `events[]` | Append application metric events. |
 | [`metrics_query`](#metrics_query) | Event selector, range, `metrics[]` | Produce bucketed and grouped result sets. |
 | [`metrics_catalog`](#metrics_catalog) | None | Discover registered event names and dimension paths. |
-| [`user_create`](#user_create) | None | Create Identity user metadata. |
+| [`user_create`](#user_create) | None (or non-empty `users[]` for batches) | Create one or many Identity users with atomic provider and event writes. |
 | [`user_get`](#user_get) | User selector | Fetch one user by id, email, username, or provider identity; optionally include password-verification material. |
 | [`user_get_details`](#user_get_details) | User selector | Fetch a user with providers, login methods, recent events. |
 | [`user_query`](#user_query) | None | Search and paginate users. |
@@ -4017,7 +4018,58 @@ Internal tables:
 
 ### `user_create`
 
-**Optional payload:** `user_id`, `email`, `username`, `phone`, `first_name`, `last_name`, `profile_photo`, `status` (default `active`), `status_reason`, `password_hash`, `password_algo`, `requires_password_change` (default `false`), `provider`, `provider_user_id`, `data`.
+Create one Identity user or a batch for application provisioning and small migrations. Each user, its optional provider link, and its creation event are atomic. Single-user calls return `data.item` as before.
+
+**Optional single-user fields:** `user_id`, `email`, `username`, `phone`, `first_name`, `last_name`, `profile_photo`, `status` (default `active`), `status_reason`, `password_hash`, `password_algo`, `requires_password_change` (default `false`), `provider`, `provider_user_id`, `data`.
+
+| Batch/control field | Type | Default | Description |
+|---|---|---|---|
+| `users` | object[] | omitted | Non-empty list of users, each using the single-user fields above. Cannot be combined with single-user fields at payload level. |
+| `on_error` | string | `fail` | `fail` rolls back the entire batch on any user failure. `continue` rolls back only the failed user, including its provider link and event. |
+| `commit` | bool | Configured write mode | `true` waits for persistence and returns results; `false` queues the request and returns reserved IDs. |
+
+The batch maximum is `KOKOADB_IDENTITY_CREATE_MAX_BATCH` (default 500, minimum 1). Empty/oversized arrays, malformed item shapes, unknown item fields, and mixed single/batch fields are rejected before enqueueing. HTTP body-size and request-timeout limits still apply. Duplicate IDs, emails, usernames, and provider mappings are errors, governed by `on_error`. Items run sequentially inside one transaction, with savepoints for `continue`.
+
+```json
+{
+  "db": "app/main",
+  "operation": "user_create",
+  "payload": {
+    "users": [
+      {"user_id": "legacy-123", "email": "alice@example.com", "first_name": "Alice"},
+      {"email": "bob@example.com", "provider": "google", "provider_user_id": "google-456"}
+    ],
+    "on_error": "continue",
+    "commit": true
+  }
+}
+```
+
+Committed batch response (user items abbreviated):
+
+```json
+{
+  "status": "success",
+  "committed": true,
+  "data": {
+    "count": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "results": [
+      {"index": 0, "user_id": "legacy-123", "status": "success", "item": {"id": "legacy-123", "email": "alice@example.com"}},
+      {"index": 1, "user_id": "generated-id", "status": "success", "item": {"id": "generated-id", "email": "bob@example.com"}}
+    ]
+  }
+}
+```
+
+With `continue`, failed results contain `index`, `user_id`, `status: "error"`, and `error: {code, message}`. Top-level status is `partial` for mixed results or `error` when every item fails. With `fail`, an error response means all users in that batch were rolled back.
+
+For `commit: false`, the initial response contains `data: {count, ids: [...], queued: true}`, `committed: false`, and `is_async_ack: true`. IDs follow input order; generated IDs are preserved when the worker executes. This acknowledges queue acceptance, not creation success or durability. Runtime conflicts are reported through the existing write-worker error logging, not as later per-user results. Use `commit: true` when you need those results. If the queue is unavailable, existing committed fallback behavior applies.
+
+User JSONL import is planned in `BACKLOG.md`; `import_jsonl` currently imports documents, not Identity users.
+
+Single-user example:
 
 ```json
 {
@@ -5146,6 +5198,12 @@ Writer leases, WAL segment size, flush cadence, safe hydrate, integrity checks, 
 | `KOKOADB_SYSTEM_RETENTION_DAYS` | `14` | System-catalog stats/event retention. Inventory rows remain. |
 | `KOKOADB_METRIC_EVENTS_CACHE_TTL_SECS` | `30` | Metrics-query cache TTL; `0` disables metrics caching. |
 | `KOKOADB_METRIC_EVENTS_RETENTION_DAYS` | empty | Raw metric-event retention; empty keeps events indefinitely. |
+
+### Identity
+
+| Setting | Default | Description |
+|---|---|---|
+| `KOKOADB_IDENTITY_CREATE_MAX_BATCH` | `500` | Maximum users in `user_create.payload.users[]`; values below 1 normalize to 1. Batch limits are enforced before queueing or writing. |
 
 ### Backup, export, and jobs
 

@@ -122,6 +122,7 @@ async fn main() {
         cfg.runtime.sync_concurrency,
         cfg.system_catalog.retention_days,
         system_catalog,
+        cfg.identity_create_max_batch,
     );
     let reaper_manager = app_state.db_manager.clone();
     let reaper_state = app_state.clone();
@@ -677,6 +678,7 @@ mod write_coordinator_repro_tests {
             1,
             14,
             Some(SystemCatalog::new(data_dir)),
+            500,
         );
         let insert_request = GatewayRequest {
             db: Some(db_path.to_string()),

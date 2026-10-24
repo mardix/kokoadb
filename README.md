@@ -152,7 +152,7 @@ Stores login-related metadata. Kokoadb does not authenticate users; see [Scope a
 
 | Operation | Description |
 |---|---|
-| `user_create`, `user_get`, `user_query`, `user_update`, `user_delete` | User records and search. `user_get` can explicitly include password-verification credentials for trusted backend use. |
+| `user_create`, `user_get`, `user_query`, `user_update`, `user_delete` | User records and search. `user_create` accepts single users or `users[]` batches (default maximum 500), with rollback or per-user failure results. `user_get` can explicitly include password-verification credentials for trusted backend use. |
 | `user_get_details` | One user with providers, login methods, and recent lifecycle events. |
 | `user_update_password` | Atomically replace an application-generated password hash. |
 | `user_update_status` | Change status immediately or schedule a future transition. |

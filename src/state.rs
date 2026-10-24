@@ -62,6 +62,7 @@ pub struct AppState {
     pub metric_events_retention_days: Option<u64>,
     pub metric_events_query_default_limit: usize,
     pub metric_events_query_max_limit: usize,
+    pub identity_create_max_batch: usize,
     pub strict_mutation_operators: bool,
     pub write_queue_enabled: bool,
     pub write_queue_default_ack_mode: String,
@@ -248,6 +249,7 @@ impl AppState {
         sync_concurrency: usize,
         system_catalog_retention_days: u64,
         system_catalog: Option<SystemCatalog>,
+        identity_create_max_batch: usize,
     ) -> Self {
         let read_cache = Cache::builder()
             .max_capacity(cache_max_entries)
@@ -294,6 +296,7 @@ impl AppState {
             metric_events_retention_days,
             metric_events_query_default_limit: metric_events_query_default_limit.max(1),
             metric_events_query_max_limit: metric_events_query_max_limit.max(1),
+            identity_create_max_batch: identity_create_max_batch.max(1),
             strict_mutation_operators,
             write_queue_enabled,
             write_queue_default_ack_mode,
@@ -709,6 +712,17 @@ impl AppState {
                             let _ = response_tx.send(result);
                         } else if let Err(err) = result {
                             eprintln!("write-queue apply error for {}: {}", db_path, err);
+                        } else if let Ok(response) = result {
+                            if response.status != "success" {
+                                let errors = response.data.as_ref()
+                                    .and_then(|data| data.get("results"))
+                                    .and_then(serde_json::Value::as_array)
+                                    .map(|results| results.iter()
+                                        .filter(|item| item.get("status").and_then(serde_json::Value::as_str) == Some("error"))
+                                        .cloned().collect::<Vec<_>>())
+                                    .unwrap_or_default();
+                                eprintln!("write-queue apply {} for {}: {}", response.status, db_path, serde_json::json!(errors));
+                            }
                         }
                     }
                 }

@@ -111,6 +111,9 @@ async fn dispatch_inner(
     if req.operation == "metrics_ingest" && req.payload.commit.is_none() {
         req.payload.commit = Some(false);
     }
+    if req.operation == "user_create" {
+        prepare_user_create_payload(&mut req.payload, state.identity_create_max_batch)?;
+    }
     let requested_ack_mode = resolve_ack_mode(state, req.payload.commit)?;
     let mut ack_mode_fallback = false;
     if req.operation == "create_db" {

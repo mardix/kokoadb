@@ -5,7 +5,111 @@ async fn user_create(
     conn: &libsql::Connection,
     req: GatewayRequest,
 ) -> AppResult<GatewayResponse> {
-    let payload = req.payload;
+    execute_user_create(conn, state.jsonb_enabled, req.payload, state.identity_create_max_batch).await
+}
+
+fn prepare_user_create_payload(payload: &mut OperationPayload, max_batch: usize) -> AppResult<()> {
+    parse_batch_on_error(payload.on_error.as_deref(), "user_create")?;
+    if let Some(users) = payload.users.as_ref() {
+        if users.is_empty() || users.len() > max_batch {
+            return Err(AppError::BadRequest(format!("users must contain 1 to {max_batch} items")));
+        }
+        let fields = serde_json::to_value(&*payload)
+            .map_err(|e| AppError::Internal(format!("user_create payload serialization failed: {e}")))?;
+        if fields.as_object().unwrap().iter().any(|(key, value)| {
+            !value.is_null() && !matches!(key.as_str(), "users" | "commit" | "on_error")
+        }) {
+            return Err(AppError::BadRequest("users cannot be combined with single-user fields".to_string()));
+        }
+    }
+    if let Some(users) = payload.users.as_mut() {
+        for user in users {
+            let fields = user.as_object_mut().ok_or_else(|| AppError::BadRequest("users items must be objects".to_string()))?;
+            if fields.keys().any(|key| !matches!(key.as_str(),
+                "user_id" | "email" | "username" | "phone" | "first_name" | "last_name"
+                | "profile_photo" | "status" | "status_reason" | "password_hash" | "password_algo"
+                | "requires_password_change" | "provider" | "provider_user_id" | "data"
+            )) {
+                return Err(AppError::BadRequest("users items must contain only user_create fields".to_string()));
+            }
+            let mut item: OperationPayload = serde_json::from_value(Value::Object(fields.clone()))
+                .map_err(|e| AppError::BadRequest(format!("invalid users item: {e}")))?;
+            let id = normalize_optional_id(user_id_text(item.user_id.take(), "user_id")?)?
+                .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+            fields.insert("user_id".to_string(), json!(id));
+        }
+    } else {
+        let id = normalize_optional_id(user_id_text(payload.user_id.take(), "user_id")?)?
+            .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
+        payload.user_id = Some(serde_json::from_value(json!(id))
+            .map_err(|e| AppError::Internal(format!("user ID serialization failed: {e}")))?);
+    }
+    Ok(())
+}
+
+async fn execute_user_create(
+    conn: &libsql::Connection,
+    jsonb_enabled: bool,
+    mut payload: OperationPayload,
+    max_batch: usize,
+) -> AppResult<GatewayResponse> {
+    prepare_user_create_payload(&mut payload, max_batch)?;
+    let on_error = parse_batch_on_error(payload.on_error.as_deref(), "user_create")?;
+    let is_batch = payload.users.is_some();
+    let users = match payload.users.take() {
+        Some(users) => users.into_iter().map(|user| serde_json::from_value(user)
+            .map_err(|e| AppError::BadRequest(format!("invalid users item: {e}"))))
+            .collect::<AppResult<Vec<OperationPayload>>>()?,
+        None => vec![payload],
+    };
+    let tx = conn.transaction().await
+        .map_err(|e| AppError::Internal(format!("user_create transaction failed: {e}")))?;
+    let count = users.len();
+    let mut results = Vec::with_capacity(count);
+    let mut succeeded = 0;
+    for (index, user) in users.into_iter().enumerate() {
+        let user_id = user.user_id.clone();
+        let savepoint = format!("__kdb_user_create_{index}");
+        if on_error == BatchOnError::Continue {
+            tx.execute(&format!("SAVEPOINT {savepoint}"), ()).await
+                .map_err(|e| AppError::Internal(format!("user_create savepoint failed: {e}")))?;
+        }
+        match create_identity_user(&tx, jsonb_enabled, user).await {
+            Ok(item) => {
+                if on_error == BatchOnError::Continue {
+                    release_transaction_savepoint(&tx, &savepoint).await?;
+                }
+                succeeded += 1;
+                results.push(json!({"index": index, "user_id": user_id, "status": "success", "item": item}));
+            }
+            Err(error) if on_error == BatchOnError::Continue && is_batch => {
+                rollback_transaction_savepoint(&tx, &savepoint).await?;
+                results.push(json!({"index": index, "user_id": user_id, "status": "error", "error": batch_error_value(error)}));
+            }
+            Err(error) => {
+                tx.rollback().await.map_err(|e| AppError::Internal(format!("user_create rollback failed: {e}")))?;
+                return Err(error);
+            }
+        }
+    }
+    tx.commit().await.map_err(|e| AppError::Internal(format!("user_create commit failed: {e}")))?;
+    if !is_batch {
+        return Ok(GatewayResponse::ok(Some(json!({"item": results[0]["item"]}))));
+    }
+    let mut response = GatewayResponse::ok(Some(json!({
+        "count": count, "succeeded": succeeded, "failed": count - succeeded, "results": results
+    })));
+    if succeeded < count {
+        response.status = if succeeded == 0 { "error" } else { "partial" };
+    }
+    Ok(response)
+}
+
+async fn create_identity_user(
+    conn: &libsql::Connection,
+    jsonb_enabled: bool,
+    payload: OperationPayload,
+) -> AppResult<Value> {
     let user_id = normalize_optional_id(user_id_text(payload.user_id, "user_id")?)?
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let status = non_empty_or(payload.status, "status", "active")?;
@@ -25,7 +129,7 @@ async fn user_create(
     if !data.is_object() {
         return Err(AppError::BadRequest("data must be an object when provided".to_string()));
     }
-    let json_expr = json_input_expr(state.jsonb_enabled);
+    let json_expr = json_input_expr(jsonb_enabled);
     conn.execute(
         &format!(
             "INSERT INTO __kdb_identity_users (
@@ -64,7 +168,7 @@ async fn user_create(
         || clean_optional(provider_user_id.clone()).is_some()
     {
         link_identity_provider(
-            state,
+            jsonb_enabled,
             conn,
             &user_id,
             provider,
@@ -75,7 +179,7 @@ async fn user_create(
         .await?;
     }
     let user = fetch_identity_user(conn, &user_id).await?;
-    Ok(GatewayResponse::ok(Some(json!({"item": user}))))
+    Ok(user)
 }
 
 async fn user_get(conn: &libsql::Connection, req: GatewayRequest) -> AppResult<GatewayResponse> {
@@ -617,7 +721,7 @@ async fn user_link_provider(
         return Err(AppError::BadRequest("data must be an object when provided".to_string()));
     }
     let provider_id = link_identity_provider(
-        state,
+        state.jsonb_enabled,
         conn,
         &user_id,
         Some(provider.clone()),
@@ -707,7 +811,7 @@ async fn user_unlink_provider(
 }
 
 async fn link_identity_provider(
-    state: &AppState,
+    jsonb_enabled: bool,
     conn: &libsql::Connection,
     user_id: &str,
     provider: Option<String>,
@@ -719,7 +823,7 @@ async fn link_identity_provider(
     let provider_user_id = required_text(provider_user_id, "provider_user_id")?;
     ensure_identity_user_exists(conn, user_id).await?;
     let provider_id = Uuid::new_v4().simple().to_string();
-    let json_expr = json_input_expr(state.jsonb_enabled);
+    let json_expr = json_input_expr(jsonb_enabled);
     conn.execute(
         &format!(
             "INSERT INTO __kdb_identity_providers (id, user_id, provider, provider_user_id, email, data)
@@ -1356,11 +1460,13 @@ fn normalize_optional_id(id: Option<String>) -> AppResult<Option<String>> {
     Ok(clean_optional(id))
 }
 
-fn user_id_text(value: Option<Value>, name: &str) -> AppResult<Option<String>> {
+fn user_id_text<T: serde::Serialize>(value: Option<T>, name: &str) -> AppResult<Option<String>> {
+    let value = serde_json::to_value(value)
+        .map_err(|e| AppError::Internal(format!("user ID serialization failed: {e}")))?;
     match value {
-        None => Ok(None),
-        Some(Value::String(value)) => Ok(clean_optional(Some(value))),
-        Some(_) => Err(AppError::BadRequest(format!(
+        Value::Null => Ok(None),
+        Value::String(value) => Ok(clean_optional(Some(value))),
+        _ => Err(AppError::BadRequest(format!(
             "{name} must be a string for this operation"
         ))),
     }
@@ -1384,13 +1490,85 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod identity_id_tests {
-    use super::{identity_user_order_by, normalize_optional_id, user_get, user_query};
+    use super::{execute_user_create, identity_user_order_by, normalize_optional_id, prepare_user_create_payload, user_get, user_query};
     use crate::{
         api::dto::{GatewayRequest, OperationPayload},
         storage::schema::init_schema_with_retry,
     };
     use libsql::Builder;
     use uuid::Uuid;
+
+    #[test]
+    fn user_batches_validate_limits_shapes_and_reserve_stable_ids() {
+        use serde_json::json;
+        let mut payload: OperationPayload = serde_json::from_value(json!({
+            "users": [{"user_id": " custom "}, {"email": "a@example.com"}], "commit": false
+        })).unwrap();
+        prepare_user_create_payload(&mut payload, 2).unwrap();
+        let first = payload.users.clone().unwrap();
+        assert_eq!(first[0]["user_id"], "custom");
+        assert_eq!(first[1]["user_id"].as_str().unwrap().len(), 32);
+        prepare_user_create_payload(&mut payload, 2).unwrap();
+        assert_eq!(payload.users.unwrap(), first);
+        for invalid in [
+            json!({"users": []}),
+            json!({"users": [{}, {}, {}]}),
+            json!({"users": [{}], "email": "mixed@example.com"}),
+            json!({"users": [1]}),
+            json!({"users": [{"users": []}]}),
+            json!({"users": [{}], "on_error": "skip"}),
+        ] {
+            let mut payload = serde_json::from_value(invalid).unwrap();
+            assert!(prepare_user_create_payload(&mut payload, 2).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn user_batches_rollback_and_continue_with_atomic_providers_and_events() {
+        use serde_json::json;
+        let db = Builder::new_local(":memory:").build().await.unwrap();
+        let conn = db.connect().unwrap();
+        init_schema_with_retry(&conn, false).await.unwrap();
+        for jsonb in [false, true] {
+            conn.execute("DELETE FROM __kdb_identity_providers", ()).await.unwrap();
+            conn.execute("DELETE FROM __kdb_identity_events", ()).await.unwrap();
+            conn.execute("DELETE FROM __kdb_identity_users", ()).await.unwrap();
+            let payload = serde_json::from_value(json!({"users": [
+                {"user_id": "a", "email": "a@example.com"},
+                {"user_id": "b", "email": "a@example.com"}
+            ]})).unwrap();
+            assert!(execute_user_create(&conn, jsonb, payload, 500).await.is_err());
+            assert_eq!(super::identity_count(&conn, "1=1", vec![]).await.unwrap(), 0);
+            let payload = serde_json::from_value(json!({"users": [
+                {"user_id": "a", "email": "a@example.com", "provider": "google", "provider_user_id": "external"},
+                {"user_id": "b", "email": "b@example.com", "provider": "google", "provider_user_id": "external"},
+                {"user_id": "c", "email": "c@example.com", "data": {"role": "admin"}},
+                {"user_id": "d", "username": "same"},
+                {"user_id": "e", "username": "same"}
+            ], "on_error": "continue"})).unwrap();
+            let response = execute_user_create(&conn, jsonb, payload, 500).await.unwrap();
+            assert_eq!(response.status, "partial");
+            let data = response.data.unwrap();
+            assert_eq!(data["succeeded"], 3);
+            assert_eq!(data["failed"], 2);
+            assert_eq!(data["results"][1]["index"], 1);
+            assert_eq!(data["results"][1]["status"], "error");
+            assert_eq!(data["results"][2]["item"]["data"]["role"], "admin");
+            assert!(super::fetch_identity_user(&conn, "b").await.is_err());
+            let mut rows = conn.query("SELECT (SELECT COUNT(*) FROM __kdb_identity_events), (SELECT COUNT(*) FROM __kdb_identity_providers)", ()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<i64>(0).unwrap(), 3);
+            assert_eq!(row.get::<i64>(1).unwrap(), 1);
+            drop(rows);
+            let invalid = serde_json::from_value(json!({"user_id": "failed", "provider": "google"})).unwrap();
+            assert!(execute_user_create(&conn, jsonb, invalid, 500).await.is_err());
+            assert!(super::fetch_identity_user(&conn, "failed").await.is_err());
+            let single = serde_json::from_value(json!({"user_id": "single", "email": "single@example.com"})).unwrap();
+            let data = execute_user_create(&conn, jsonb, single, 500).await.unwrap().data.unwrap();
+            assert_eq!(data["item"]["id"], "single");
+            assert!(data.get("results").is_none());
+        }
+    }
 
     #[test]
     fn user_sort_validates_fields_and_preserves_priority() {

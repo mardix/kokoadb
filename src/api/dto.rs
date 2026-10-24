@@ -57,6 +57,7 @@ pub struct OperationPayload {
     pub attach_users: Option<bool>,
     pub attach_user_fields: Option<Vec<String>>,
     pub email: Option<String>,
+    pub users: Option<Vec<Value>>,
     pub username: Option<String>,
     pub phone: Option<String>,
     pub first_name: Option<String>,
