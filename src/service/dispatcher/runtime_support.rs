@@ -1223,7 +1223,7 @@ fn invalidate_read_cache_after_write(
 
 async fn get_cached_read(state: &AppState, meta: &CacheKeyMeta) -> Option<Value> {
     match meta.policy {
-        CachePolicy::Default => state.read_cache.get(&meta.key).await,
+        CachePolicy::Default => state.read_cache.get(&meta.key).await.map(|item| item.data.clone()),
         CachePolicy::CustomTtl(_) => state.get_ttl_override_cache(&meta.key),
         CachePolicy::Invalidate => None,
     }
@@ -1232,7 +1232,7 @@ async fn get_cached_read(state: &AppState, meta: &CacheKeyMeta) -> Option<Value>
 async fn put_cached_read(state: &AppState, meta: &CacheKeyMeta, data: Value) {
     match meta.policy {
         CachePolicy::Default => {
-            state.read_cache.insert(meta.key.clone(), data).await;
+            state.put_default_read_cache(meta.key.clone(), data).await;
         }
         CachePolicy::CustomTtl(ttl_secs) => {
             state.put_ttl_override_cache(meta.key.clone(), data, ttl_secs);

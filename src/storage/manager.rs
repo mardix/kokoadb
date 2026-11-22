@@ -487,6 +487,13 @@ impl MultiDbManager {
         }
     }
 
+    pub async fn replication_backlog(&self) -> Option<serde_json::Value> {
+        match &self.backend {
+            StorageBackend::Local(_) => None,
+            StorageBackend::S3(engine) => Some(engine.replication_backlog().await),
+        }
+    }
+
     pub fn max_active_dbs(&self) -> usize {
         self.max_active_dbs
     }

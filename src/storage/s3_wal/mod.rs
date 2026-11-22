@@ -7,7 +7,11 @@ pub mod replicator;
 pub mod segment;
 pub mod snapshot;
 
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use chrono::{Duration, NaiveDateTime, SecondsFormat, Utc};
 use dashmap::DashMap;
@@ -26,6 +30,7 @@ use crate::storage::schema::init_schema_with_retry;
 use object_store::{AwsS3ObjectStore, ObjectStore, as_arc, split_s3_uri};
 use replicator::Replicator;
 use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     sync::{Mutex, Semaphore},
     task::JoinSet,
 };
@@ -46,6 +51,7 @@ pub struct S3WalEngine {
     wal_queue: Arc<tokio::sync::Mutex<Vec<QueuedWalRecord>>>,
     async_replication: bool,
     replicator: Arc<Replicator>,
+    snapshot_slots: Arc<Semaphore>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,6 +196,7 @@ impl S3WalEngine {
             wal_queue: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             async_replication,
             replicator,
+            snapshot_slots: Arc::new(Semaphore::new(2)),
         }
     }
 }
@@ -745,29 +752,19 @@ impl S3WalEngine {
                 .await
                 .map_err(|e| AppError::Internal(format!("failed to create hydrate dir: {e}")))?;
 
-            let staged_file = parent.join(format!("._tmp_hydrate_{}.db", Uuid::new_v4().simple()));
-            remove_if_exists(&staged_file).await?;
-            self.hydrate_local_from_remote(&cache_key, &staged_file, snapshot_id)
-                .await?;
-
-            let staged_exists = tokio::fs::try_exists(&staged_file)
-                .await
-                .map_err(|e| AppError::Internal(format!("failed to verify staged hydrate: {e}")))?;
-            if !staged_exists {
+            let staged = SnapshotTempFile(
+                parent.join(format!("._tmp_hydrate_{}.db", Uuid::new_v4().simple())),
+            );
+            if !self.hydrate_local_from_remote(&cache_key, &staged.0, snapshot_id).await? {
                 return Ok(false);
             }
             if self.cfg.safe_hydrate_quick_check {
-                if let Err(err) = quick_check_db_file(&staged_file).await {
-                    let _ = remove_if_exists(&staged_file).await;
-                    return Err(err);
-                }
+                quick_check_db_file(&staged.0).await?;
             }
 
-            atomic_replace_db_file(&file_path, &staged_file).await?;
-        } else {
-            remove_if_exists(&file_path).await?;
-            self.hydrate_local_from_remote(&cache_key, &file_path, snapshot_id)
-                .await?;
+            atomic_replace_db_file(&file_path, &staged.0).await?;
+        } else if !self.hydrate_local_from_remote(&cache_key, &file_path, snapshot_id).await? {
+            return Ok(false);
         }
 
         let exists = tokio::fs::try_exists(&file_path)
@@ -1094,15 +1091,27 @@ impl S3WalEngine {
                 dbs.insert(db);
             }
         }
-        for entry in self.wal_queue.lock().await.iter() {
-            if !is_internal_db_path(&entry.db_path) {
-                dbs.insert(entry.db_path.clone());
-            }
-        }
+        let staged_db_paths: HashSet<String> = self.wal_queue.lock().await.iter()
+            .filter(|entry| !is_internal_db_path(&entry.db_path))
+            .map(|entry| entry.db_path.clone())
+            .collect();
+        dbs.extend(staged_db_paths.iter().cloned());
 
         let mut report = ReplicationFlushReport::default();
 
         for db_path in dbs {
+            if !staged_db_paths.contains(&db_path) {
+                match self.has_queued_replication_jobs(&db_path).await {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(err) => {
+                        if report.error_samples.len() < 5 {
+                            report.error_samples.push(format!("probe {db_path} failed: {err}"));
+                        }
+                        continue;
+                    }
+                }
+            }
             let conn = match self.get_conn(&db_path, false).await {
                 Ok(c) => c,
                 Err(err) => {
@@ -1118,8 +1127,8 @@ impl S3WalEngine {
             let mut staged = Vec::<QueuedWalRecord>::new();
             {
                 let mut q = self.wal_queue.lock().await;
-                let mut remain = Vec::with_capacity(q.len());
-                for item in q.drain(..) {
+                let mut remain = Vec::new();
+                for item in std::mem::take(&mut *q) {
                     if item.db_path == db_path {
                         staged.push(item);
                     } else {
@@ -1128,14 +1137,26 @@ impl S3WalEngine {
                 }
                 *q = remain;
             }
+            let mut retry = Vec::new();
             for item in staged {
-                let _ = conn
+                if let Err(err) = conn
                     .execute(
                         "INSERT INTO __kdb_replication_jobs (sql, args_json, status, attempts, updated_at)
                          VALUES (?, ?, 'queued', 0, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-                        libsql::params![item.sql, item.args_json],
+                        libsql::params![item.sql.as_str(), item.args_json.as_str()],
                     )
-                    .await;
+                    .await
+                {
+                    if report.error_samples.len() < 5 {
+                        report.error_samples.push(format!("persist staged job for {db_path} failed: {err}"));
+                    }
+                    retry.push(item);
+                }
+            }
+            if !retry.is_empty() {
+                let mut queue = self.wal_queue.lock().await;
+                retry.append(&mut queue);
+                *queue = retry;
             }
 
             let total = self.count_pending_kdb_replication_jobs(&conn).await?;
@@ -1156,11 +1177,9 @@ impl S3WalEngine {
             if jobs.is_empty() {
                 continue;
             }
-            let records = jobs
-                .iter()
-                .map(|(_, sql, args)| (sql.clone(), args.clone()))
-                .collect::<Vec<_>>();
-            let ids = jobs.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+            let (ids, records): (Vec<_>, Vec<_>) = jobs.into_iter()
+                .map(|(id, sql, args)| (id, (sql, args)))
+                .unzip();
             match self.append_records_for_db(&db_path, records, true).await {
                 Ok(_) => {
                     self.delete_kdb_replication_jobs(&conn, &ids).await?;
@@ -1185,6 +1204,43 @@ impl S3WalEngine {
         }
 
         Ok(report)
+    }
+
+    pub async fn replication_backlog(&self) -> serde_json::Value {
+        let queue = self.wal_queue.lock().await;
+        let bytes: usize = queue.iter()
+            .map(|item| item.db_path.capacity() + item.sql.capacity() + item.args_json.capacity())
+            .sum();
+        serde_json::json!({
+            "staged_records": queue.len(),
+            "staged_string_capacity_bytes": bytes,
+            "staged_vector_capacity_bytes": queue.capacity() * std::mem::size_of::<QueuedWalRecord>()
+        })
+    }
+
+    async fn has_queued_replication_jobs(&self, db_path: &str) -> AppResult<bool> {
+        let cached = self.conns.get(db_path).map(|entry| entry.value().clone());
+        if let Some(conn) = cached {
+            return has_queued_replication_rows(&conn).await;
+        }
+        let (_, path) = resolve_db_file(self.base_path.as_str(), db_path)?;
+        let database = Builder::new_local(path)
+            .flags(libsql::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .build().await.map_err(|e| AppError::Internal(format!("open probe database failed: {e}")))?;
+        let conn = database.connect()
+            .map_err(|e| AppError::Internal(format!("connect probe database failed: {e}")))?;
+        let mut tables = conn.query(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = '__kdb_replication_jobs'",
+            (),
+        ).await.map_err(|e| AppError::Internal(format!("probe replication schema failed: {e}")))?;
+        let exists = tables.next().await
+            .map_err(|e| AppError::Internal(format!("read replication schema failed: {e}")))?
+            .is_some();
+        drop(tables);
+        if !exists {
+            return Ok(false);
+        }
+        has_queued_replication_rows(&conn).await
     }
 
     async fn list_local_db_paths(&self) -> AppResult<Vec<String>> {
@@ -1666,9 +1722,11 @@ impl S3WalEngine {
         db_path: &str,
         local_file: &std::path::Path,
         snapshot_id: Option<&str>,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
+        let _slot = self.snapshot_slots.acquire().await
+            .map_err(|e| AppError::Internal(format!("snapshot worker unavailable: {e}")))?;
         let Some(manifest) = self.replicator.read_manifest(db_path).await? else {
-            return Ok(());
+            return Ok(false);
         };
         let (resolved_snapshot_id, object_key) = resolve_manifest_snapshot(&manifest, snapshot_id)
             .ok_or_else(|| {
@@ -1677,19 +1735,33 @@ impl S3WalEngine {
                     "snapshot not found in manifest for db {db_path}: {selector}"
                 ))
             })?;
+        let expected = manifest.snapshots.iter().find(|snapshot| snapshot.id == resolved_snapshot_id);
         for storage_key in manifest_object_key_candidates(&self.cfg.prefix, db_path, &object_key)? {
-            if let Some(bytes) = self.replicator.get_blob(&storage_key).await? {
-                if let Some(parent) = local_file.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                        AppError::Internal(format!("failed to create local hydrate dir: {e}"))
-                    })?;
+            if let Some(body) = self.replicator.get_blob_stream(&storage_key).await? {
+                let parent = local_file.parent().ok_or_else(|| {
+                    AppError::Internal("invalid snapshot destination".to_string())
+                })?;
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    AppError::Internal(format!("failed to create local hydrate dir: {e}"))
+                })?;
+                let staged = SnapshotTempFile(parent.join(format!("._tmp_hydrate_{}.db", Uuid::new_v4().simple())));
+                let mut file = tokio::fs::File::create_new(&staged.0).await
+                    .map_err(|e| AppError::Internal(format!("create snapshot staging file failed: {e}")))?;
+                let (size, checksum) = copy_snapshot(body.into_async_read(), &mut file).await
+                    .map_err(|e| AppError::Internal(format!("download snapshot failed: {e}")))?;
+                if let Some(expected) = expected {
+                    if size != expected.size_bytes || (!expected.checksum.is_empty() && checksum != expected.checksum) {
+                        return Err(AppError::Internal(format!("snapshot size or checksum mismatch for {db_path}")));
+                    }
                 }
-                tokio::fs::write(local_file, bytes).await.map_err(|e| {
-                    AppError::Internal(format!("failed writing hydrated remote db: {e}"))
+                file.sync_all().await.map_err(|e| AppError::Internal(format!("sync snapshot staging file failed: {e}")))?;
+                drop(file);
+                tokio::fs::rename(&staged.0, local_file).await.map_err(|e| {
+                    AppError::Internal(format!("install downloaded snapshot failed: {e}"))
                 })?;
                 self.loaded_snapshot_ids
                     .insert(db_path.to_string(), resolved_snapshot_id);
-                return Ok(());
+                return Ok(true);
             }
         }
         Err(AppError::NotFound(format!(
@@ -1716,24 +1788,28 @@ impl S3WalEngine {
         db_path: &str,
         target: &Replicator,
     ) -> AppResult<(SnapshotMeta, Vec<String>)> {
+        let _slot = self.snapshot_slots.acquire().await
+            .map_err(|e| AppError::Internal(format!("snapshot worker unavailable: {e}")))?;
         let temp_name = format!(
             "_tmp_sync/{}_{}.db",
             db_path.replace('/', "__"),
             Uuid::new_v4().simple()
         );
-        let temp_file = std::path::PathBuf::from(self.base_path.as_ref()).join(temp_name);
+        let staged = SnapshotTempFile(PathBuf::from(self.base_path.as_ref()).join(temp_name));
+        let temp_file = &staged.0;
         if let Some(parent) = temp_file.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| AppError::Internal(format!("failed to create sync temp dir: {e}")))?;
         }
-        let quoted = sql_quote_path(&temp_file)?;
+        let quoted = sql_quote_path(temp_file)?;
         conn.execute_batch(&format!("VACUUM INTO '{quoted}';"))
             .await
             .map_err(|e| AppError::Internal(format!("snapshot sync vacuum-into failed: {e}")))?;
-        let bytes = tokio::fs::read(&temp_file)
-            .await
-            .map_err(|e| AppError::Internal(format!("snapshot sync read failed: {e}")))?;
+        let file = tokio::fs::File::open(temp_file).await
+            .map_err(|e| AppError::Internal(format!("open snapshot for hashing failed: {e}")))?;
+        let (size_bytes, checksum) = copy_snapshot(file, tokio::io::sink()).await
+            .map_err(|e| AppError::Internal(format!("hash snapshot failed: {e}")))?;
         let applied_seq = target
             .read_manifest(db_path)
             .await?
@@ -1742,14 +1818,16 @@ impl S3WalEngine {
         let snapshot_id = format!("{}-{:020}", unix_now_secs(), applied_seq);
         let versioned_key = versioned_snapshot_key(&snapshot_id);
         let storage_key = preferred_manifest_object_key(&self.cfg.prefix, db_path, &versioned_key)?;
-        let checksum = sha256_hex(&bytes);
-        target.put_blob(&storage_key, &bytes).await?;
+        {
+            let _upload = crate::diagnostics::SNAPSHOT_BUFFERS.track(0);
+            target.put_blob_file(&storage_key, temp_file).await?;
+        }
         let snapshot_meta = SnapshotMeta {
             id: snapshot_id,
             tenant: db_path.to_string(),
             object_key: versioned_key,
             checksum,
-            size_bytes: bytes.len(),
+            size_bytes,
             created_at: unix_now_secs().to_string(),
             from_seq: 0,
             to_seq: applied_seq,
@@ -1763,7 +1841,6 @@ impl S3WalEngine {
             )
             .await?;
         let _ = updated_manifest;
-        remove_if_exists(&temp_file).await?;
         Ok((snapshot_meta, deleted_keys))
     }
 
@@ -1969,6 +2046,16 @@ async fn manifest_blob_exists(
     Ok(false)
 }
 
+async fn has_queued_replication_rows(conn: &Connection) -> AppResult<bool> {
+    let mut rows = conn.query(
+        "SELECT 1 FROM __kdb_replication_jobs WHERE status = 'queued' LIMIT 1",
+        (),
+    ).await.map_err(|e| AppError::Internal(format!("probe replication jobs failed: {e}")))?;
+    Ok(rows.next().await
+        .map_err(|e| AppError::Internal(format!("read replication job probe failed: {e}")))?
+        .is_some())
+}
+
 fn resolve_manifest_snapshot(
     manifest: &Manifest,
     requested_id: Option<&str>,
@@ -2103,10 +2190,35 @@ async fn cleanup_temp_artifacts_under_base(
     Ok(removed)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+struct SnapshotTempFile(PathBuf);
+
+impl Drop for SnapshotTempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+async fn copy_snapshot(
+    mut source: impl AsyncRead + Unpin,
+    mut destination: impl AsyncWrite + Unpin,
+) -> std::io::Result<(usize, String)> {
+    const BUFFER_BYTES: usize = 64 * 1024;
+    let mut memory = crate::diagnostics::SNAPSHOT_BUFFERS.track(0);
+    let mut buffer = vec![0; BUFFER_BYTES];
+    memory.resize(buffer.capacity() as u64);
     let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    let mut size = 0;
+    loop {
+        let read = source.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        destination.write_all(&buffer[..read]).await?;
+        size += read;
+    }
+    destination.flush().await?;
+    Ok((size, format!("{:x}", hasher.finalize())))
 }
 
 async fn remove_if_exists(path: &std::path::Path) -> AppResult<()> {
@@ -2342,6 +2454,18 @@ mod tests {
         resolve_manifest_snapshot, sanitize_import_filename,
     };
     use crate::storage::s3_wal::{manifest::Manifest, snapshot::SnapshotMeta};
+
+    #[tokio::test]
+    async fn snapshot_copy_hashes_and_writes_multiple_chunks() {
+        use sha2::{Digest, Sha256};
+
+        let input: Vec<u8> = (0..200_000).map(|index| (index % 251) as u8).collect();
+        let mut output = Vec::new();
+        let (size, checksum) = super::copy_snapshot(input.as_slice(), &mut output).await.unwrap();
+        assert_eq!(size, input.len());
+        assert_eq!(checksum, format!("{:x}", Sha256::digest(&input)));
+        assert_eq!(output, input);
+    }
 
     fn manifest() -> Manifest {
         let snapshot = SnapshotMeta {

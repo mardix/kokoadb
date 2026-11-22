@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::api::dto::{GatewayRequest, GatewayResponse};
 use crate::error::{AppError, AppResult};
+use crate::diagnostics::{ByteReservation, WRITE_PAYLOADS, serialized_bytes};
 use crate::storage::manager::MultiDbManager;
 use crate::storage::system_catalog::SystemCatalog;
 
@@ -40,8 +41,9 @@ pub struct AppState {
     pub export_local_path: String,
     pub cache_enabled: bool,
     pub cache_max_entries: u64,
-    pub read_cache: Cache<String, Value>,
-    pub read_cache_ttl_overrides: Arc<DashMap<String, (u64, Value)>>,
+    pub read_cache: Cache<String, Arc<CachedRead>>,
+    pub read_cache_ttl_overrides: Arc<DashMap<String, (u64, Arc<CachedRead>)>>,
+    read_cache_reserved_bytes: Arc<AtomicU64>,
     pub cache_epochs: Arc<DashMap<String, u64>>,
     pub response_include_system_timestamps: bool,
     pub response_include_namespace: bool,
@@ -85,7 +87,24 @@ pub struct PendingDocument {
     pub revision: u64,
     pub collection: Option<String>,
     pub document: Value,
+    estimated_serialized_bytes: u64,
 }
+
+pub struct CachedRead {
+    pub data: Value,
+    pub estimated_serialized_bytes: u64,
+    reserved_bytes: u64,
+    total_reserved: Arc<AtomicU64>,
+}
+
+impl Drop for CachedRead {
+    fn drop(&mut self) {
+        self.total_reserved.fetch_sub(self.reserved_bytes, Ordering::Relaxed);
+    }
+}
+
+const READ_CACHE_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
+const READ_CACHE_ENTRY_BYTE_LIMIT: u64 = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct PendingWriteRevision {
@@ -105,6 +124,7 @@ enum QueuedWriteMode {
 }
 
 struct QueuedWrite {
+    memory: ByteReservation,
     db_path: String,
     request: GatewayRequest,
     mode: QueuedWriteMode,
@@ -276,6 +296,7 @@ impl AppState {
             cache_max_entries: cache_max_entries.max(1),
             read_cache,
             read_cache_ttl_overrides: Arc::new(DashMap::new()),
+            read_cache_reserved_bytes: Arc::new(AtomicU64::new(0)),
             cache_epochs: Arc::new(DashMap::new()),
             response_include_system_timestamps,
             response_include_namespace,
@@ -410,14 +431,60 @@ impl AppState {
             .unwrap_or(0);
         let entry = self.read_cache_ttl_overrides.get(key)?;
         if entry.value().0 > now {
-            return Some(entry.value().1.clone());
+            return Some(entry.value().1.data.clone());
         }
         drop(entry);
-        self.read_cache_ttl_overrides.remove(key);
+        self.read_cache_ttl_overrides.remove_if(key, |_, item| item.0 <= now);
         None
     }
 
+    pub async fn put_default_read_cache(&self, key: String, value: Value) {
+        if let Some(value) = self.reserve_cached_read(&key, value) {
+            self.read_cache.insert(key, value).await;
+        }
+    }
+
+    fn reserve_cached_read(&self, key: &str, data: Value) -> Option<Arc<CachedRead>> {
+        let estimated_serialized_bytes = serialized_bytes(&data);
+        let reserved_bytes = estimated_serialized_bytes.saturating_add(key.len() as u64);
+        if reserved_bytes > READ_CACHE_ENTRY_BYTE_LIMIT {
+            return None;
+        }
+        let total_reserved = &self.read_cache_reserved_bytes;
+        let mut current = total_reserved.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_add(reserved_bytes);
+            if next > READ_CACHE_BYTE_LIMIT {
+                return None;
+            }
+            match total_reserved.compare_exchange_weak(
+                current, next, Ordering::Relaxed, Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
+        Some(Arc::new(CachedRead {
+            data,
+            estimated_serialized_bytes,
+            reserved_bytes,
+            total_reserved: total_reserved.clone(),
+        }))
+    }
+
+    pub async fn maintain_read_cache(&self) {
+        self.read_cache.run_pending_tasks().await;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        self.read_cache_ttl_overrides.retain(|_, item| item.0 > now);
+    }
+
     pub fn put_ttl_override_cache(&self, key: String, value: Value, ttl_secs: u64) {
+        let Some(value) = self.reserve_cached_read(&key, value) else {
+            return;
+        };
         if self.read_cache_ttl_overrides.len() as u64 >= self.cache_max_entries {
             if let Some(first) = self.read_cache_ttl_overrides.iter().next() {
                 let evict_key = first.key().clone();
@@ -446,6 +513,7 @@ impl AppState {
         request.payload.commit = Some(true);
         let sender = self.get_or_create_write_sender(db_path);
         match sender.try_send(QueuedWrite {
+            memory: WRITE_PAYLOADS.track(serialized_bytes(&request.payload)),
             db_path: db_path.to_string(),
             request,
             mode: QueuedWriteMode::Accepted,
@@ -477,6 +545,7 @@ impl AppState {
         let (response_tx, response_rx) = oneshot::channel();
         match sender
             .send(QueuedWrite {
+                memory: WRITE_PAYLOADS.track(serialized_bytes(&request.payload)),
                 db_path: db_path.to_string(),
                 request,
                 mode: QueuedWriteMode::Committed,
@@ -513,6 +582,7 @@ impl AppState {
         let (response_tx, response_rx) = oneshot::channel();
         match sender
             .send(QueuedWrite {
+                memory: WRITE_PAYLOADS.track(serialized_bytes(&request.payload)),
                 db_path: db_path.to_string(),
                 request,
                 mode: QueuedWriteMode::AcceptedPrepared,
@@ -542,12 +612,14 @@ impl AppState {
         document: Value,
     ) -> u64 {
         let revision = self.pending_revision.fetch_add(1, Ordering::Relaxed);
+        let estimated_serialized_bytes = serialized_bytes(&document);
         self.pending_documents.insert(
             pending_document_key(db_path, id),
             PendingDocument {
                 revision,
                 collection,
                 document,
+                estimated_serialized_bytes,
             },
         );
         revision
@@ -660,6 +732,7 @@ impl AppState {
                 let Some(item) = next else {
                     break;
                 };
+                let _memory = item.memory;
                 if item
                     .response_tx
                     .as_ref()
@@ -730,6 +803,56 @@ impl AppState {
             remove_write_queue_generation(&state.write_queues, &worker_db_path, &worker_sender);
         });
         tx
+    }
+
+    pub fn memory_breakdown(&self) -> Value {
+        let mut cache_count = 0_u64;
+        let mut cache_bytes = 0_u64;
+        let mut largest_cache_bytes = 0_u64;
+        for (_, item) in self.read_cache.iter() {
+            cache_count += 1;
+            cache_bytes = cache_bytes.saturating_add(item.estimated_serialized_bytes);
+            largest_cache_bytes = largest_cache_bytes.max(item.estimated_serialized_bytes);
+        }
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|v| v.as_secs()).unwrap_or(0);
+        let mut override_bytes = 0_u64;
+        let mut expired_override_bytes = 0_u64;
+        let mut expired_override_count = 0_u64;
+        for entry in self.read_cache_ttl_overrides.iter() {
+            let (expires_at, item) = entry.value();
+            override_bytes = override_bytes.saturating_add(item.estimated_serialized_bytes);
+            if *expires_at <= now {
+                expired_override_count += 1;
+                expired_override_bytes = expired_override_bytes.saturating_add(item.estimated_serialized_bytes);
+            }
+        }
+        let mut pending_bytes = 0_u64;
+        for entry in self.pending_documents.iter() {
+            pending_bytes = pending_bytes.saturating_add(entry.estimated_serialized_bytes);
+        }
+        json!({
+            "sqlite": crate::diagnostics::sqlite_memory(),
+            "response_cache": {
+                "estimated_reserved_bytes": self.read_cache_reserved_bytes.load(Ordering::Relaxed),
+                "estimated_byte_limit": READ_CACHE_BYTE_LIMIT,
+                "estimated_entry_byte_limit": READ_CACHE_ENTRY_BYTE_LIMIT,
+                "entries": cache_count,
+                "estimated_serialized_bytes": cache_bytes,
+                "largest_entry_estimated_serialized_bytes": largest_cache_bytes,
+                "ttl_override_entries": self.read_cache_ttl_overrides.len(),
+                "ttl_override_estimated_serialized_bytes": override_bytes,
+                "expired_ttl_override_entries": expired_override_count,
+                "expired_ttl_override_estimated_serialized_bytes": expired_override_bytes
+            },
+            "pending_documents": {
+                "entries": self.pending_documents.len(),
+                "estimated_serialized_bytes": pending_bytes
+            },
+            "outstanding_write_payloads": WRITE_PAYLOADS.snapshot(),
+            "snapshot_buffers": crate::diagnostics::SNAPSHOT_BUFFERS.snapshot(),
+            "s3_upload_copies": crate::diagnostics::S3_UPLOAD_COPIES.snapshot(),
+            "s3_download_buffers": crate::diagnostics::S3_DOWNLOAD_BUFFERS.snapshot()
+        })
     }
 
     pub fn write_queue_stats(&self) -> Vec<WriteQueueStat> {
@@ -1055,6 +1178,7 @@ mod write_queue_tests {
 
     fn queued_write() -> QueuedWrite {
         QueuedWrite {
+            memory: WRITE_PAYLOADS.track(0),
             db_path: "app/main".to_string(),
             request: GatewayRequest {
                 db: Some("app/main".to_string()),
@@ -1065,6 +1189,24 @@ mod write_queue_tests {
             mode: QueuedWriteMode::Committed,
             response_tx: None,
         }
+    }
+
+    #[tokio::test]
+    async fn queue_payload_reservations_release_on_failed_send_and_receiver_drop() {
+        static TRACKER: crate::diagnostics::ByteTracker = crate::diagnostics::ByteTracker::new();
+        let (sender, receiver) = mpsc::channel(1);
+        let mut first = queued_write();
+        first.memory = TRACKER.track(100);
+        assert!(sender.try_send(first).is_ok());
+        let mut second = queued_write();
+        second.memory = TRACKER.track(200);
+        let failed = sender.try_send(second).err().expect("channel should be full");
+        assert_eq!(TRACKER.snapshot()["current_bytes"], 300);
+        drop(failed);
+        assert_eq!(TRACKER.snapshot()["current_bytes"], 100);
+        drop(receiver);
+        assert_eq!(TRACKER.snapshot()["current_bytes"], 0);
+        assert_eq!(TRACKER.snapshot()["active"], 0);
     }
 
     #[tokio::test]

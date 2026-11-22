@@ -2,6 +2,7 @@
 
 mod api;
 mod config;
+mod diagnostics;
 mod error;
 mod query;
 mod service;
@@ -259,6 +260,7 @@ async fn main() {
                 }
                 last_temp_cleanup_at = unix_now_secs();
             }
+            reaper_state.maintain_read_cache().await;
             if db_idle_close_secs > 0 {
                 match reaper_manager.close_idle_dbs(db_idle_close_secs).await {
                     Ok(closed) if closed > 0 => eprintln!("idle-db-close closed={closed}"),
@@ -946,6 +948,96 @@ mod write_coordinator_repro_tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+
+        let cached_response = json!({"items": [{"text": "diagnostic payload"}]});
+        let cached_bytes = crate::diagnostics::serialized_bytes(&cached_response);
+        state.put_default_read_cache("memory-test".to_string(), cached_response.clone()).await;
+        state.read_cache.run_pending_tasks().await;
+        state.put_ttl_override_cache("memory-test-ttl".to_string(), cached_response, 60);
+        let revision = state.put_pending_document(db_path, "memory-test-pending", Some("users".to_string()), json!({"_id": "memory-test-pending", "hello": "world"}));
+        let memory = crate::service::dispatcher::dispatch(&state, "", GatewayRequest {
+            db: None,
+            operation: "system_memory".to_string(),
+            namespace: None,
+            payload: Default::default(),
+        }).await.unwrap().data.unwrap();
+        let breakdown = &memory["memory_breakdown"];
+        assert!(breakdown["sqlite"]["allocated_bytes"]["current"].as_i64().unwrap() > 0);
+        assert!(breakdown["response_cache"]["estimated_serialized_bytes"].as_u64().unwrap() >= cached_bytes);
+        assert!(breakdown["response_cache"]["ttl_override_estimated_serialized_bytes"].as_u64().unwrap() >= cached_bytes);
+        assert!(breakdown["pending_documents"]["estimated_serialized_bytes"].as_u64().unwrap() > 0);
+        assert!(breakdown["replication_backlog"].is_null());
+        let oversized = Value::String("x".repeat(2 * 1024 * 1024));
+        state.put_default_read_cache("oversized".into(), oversized.clone()).await;
+        state.put_ttl_override_cache("oversized".into(), oversized, 60);
+        assert!(state.read_cache.get("oversized").await.is_none());
+        assert!(state.get_ttl_override_cache("oversized").is_none());
+        state.read_cache_ttl_overrides.get_mut("memory-test-ttl").unwrap().0 = 0;
+        state.maintain_read_cache().await;
+        assert_eq!(state.memory_breakdown()["response_cache"]["ttl_override_entries"], 0);
+        state.clear_pending_if_current(db_path, &[crate::state::PendingWriteRevision { id: "memory-test-pending".to_string(), revision }]);
+        state.read_cache.invalidate_all();
+        state.read_cache.run_pending_tasks().await;
+        assert_eq!(state.memory_breakdown()["response_cache"]["entries"], 0);
+        assert_eq!(state.memory_breakdown()["pending_documents"]["entries"], 0);
+
+        let mut search_state = state.clone();
+        search_state.response_include_system_timestamps = false;
+        for (id, collection, status) in [
+            ("fts-a", "articles", "published"),
+            ("fts-b", "articles", "published"),
+            ("fts-draft", "articles", "draft"),
+            ("fts-other", "notes", "published"),
+        ] {
+            conn.execute(
+                "INSERT INTO __kdb_documents (id, collection, data, _metadata)
+                 VALUES (?, ?, json(?), json(?))",
+                libsql::params![
+                    id, collection,
+                    json!({"_id": id, "title": "release-note", "status": status}).to_string(),
+                    r#"{"source":"fts-test"}"#
+                ],
+            ).await.unwrap();
+        }
+        crate::storage::schema::set_bool_config(&conn, "fts_enabled", true).await.unwrap();
+        let search_request = |term: &str, sort: Option<Value>| GatewayRequest {
+            db: Some(db_path.to_string()),
+            operation: "query".to_string(),
+            namespace: Some(NamespaceSelector::One("articles".to_string())),
+            payload: OperationPayload {
+                collection: Some("articles".into()),
+                search: Some(term.into()),
+                filter: Some(json!({"status": "published"})),
+                sort,
+                limit: Some(1),
+                include_metadata: Some(true),
+                cache: Some(crate::api::dto::CacheHint::Bool(false)),
+                ..Default::default()
+            },
+        };
+        let missing = crate::service::dispatcher::dispatch(
+            &search_state, db_path, search_request("release", None),
+        ).await.unwrap_err();
+        assert!(missing.to_string().contains("run reindex_fts"));
+        crate::storage::schema::reindex_fts(&conn).await.unwrap();
+        for (term, sort, expected_id) in [
+            ("release AND note", None, None),
+            ("release-note", Some(json!("_namespace asc, _created_at desc, _id desc")), Some("fts-b")),
+            ("release \"note", Some(json!("_id asc, _size_bytes asc")), Some("fts-a")),
+        ] {
+            let data = crate::service::dispatcher::dispatch(
+                &search_state, db_path, search_request(term, sort),
+            ).await.unwrap().data.unwrap();
+            assert_eq!(data["total_items"], 2);
+            assert_eq!(data["count"], 1);
+            let item = &data["items"][0];
+            if let Some(expected_id) = expected_id {
+                assert_eq!(item["_id"], expected_id);
+            }
+            assert!(item.get("_created_at").is_none());
+            assert!(item.get("_namespace").is_none());
+            assert_eq!(item["_metadata"]["source"], "fts-test");
+        }
 
         let delete_db_request = GatewayRequest {
             db: Some(db_path.to_string()),

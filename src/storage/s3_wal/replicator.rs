@@ -171,17 +171,16 @@ impl Replicator {
         Ok(manifest_segment)
     }
 
-    pub async fn get_blob(&self, key: &str) -> AppResult<Option<Vec<u8>>> {
-        Ok(self.store.get(key).await?.map(|(raw, _)| raw))
+    pub async fn get_blob_stream(&self, key: &str) -> AppResult<Option<aws_sdk_s3::primitives::ByteStream>> {
+        self.store.get_stream(key).await
     }
 
     pub async fn blob_exists(&self, key: &str) -> AppResult<bool> {
         self.store.exists(key).await
     }
 
-    pub async fn put_blob(&self, key: &str, bytes: &[u8]) -> AppResult<()> {
-        let _ = self.store.put(key, bytes).await?;
-        Ok(())
+    pub async fn put_blob_file(&self, key: &str, path: &std::path::Path) -> AppResult<()> {
+        self.store.put_file(key, path).await
     }
 
     pub async fn delete_blob(&self, key: &str) -> AppResult<()> {

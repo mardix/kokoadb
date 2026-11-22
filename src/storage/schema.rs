@@ -739,15 +739,20 @@ pub async fn set_fts_index_enabled(conn: &Connection, enabled: bool) -> AppResul
 }
 
 pub async fn reindex_fts(conn: &Connection) -> AppResult<u64> {
-    set_fts_index_enabled(conn, true).await?;
-    conn.execute("DELETE FROM __kdb_documents_fts", ())
+    let tx = conn.transaction().await
+        .map_err(|e| AppError::Internal(format!("fts reindex begin failed: {e}")))?;
+    set_fts_index_enabled(&tx, true).await?;
+    tx.execute("DELETE FROM __kdb_documents_fts", ())
         .await
         .map_err(|e| AppError::Internal(format!("fts clear failed: {e}")))?;
-    conn.execute(
+    let indexed = tx.execute(
         "INSERT INTO __kdb_documents_fts(rowid, id, content)
          SELECT rowid, id, json(data) FROM __kdb_documents",
         (),
     )
     .await
-    .map_err(|e| AppError::Internal(format!("fts reindex failed: {e}")))
+    .map_err(|e| AppError::Internal(format!("fts reindex failed: {e}")))?;
+    tx.commit().await
+        .map_err(|e| AppError::Internal(format!("fts reindex commit failed: {e}")))?;
+    Ok(indexed)
 }

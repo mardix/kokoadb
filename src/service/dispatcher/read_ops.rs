@@ -719,6 +719,59 @@ fn explicit_ids_from_query_filter(filter: Option<&Value>) -> AppResult<Option<Ve
     Ok(Some(ids))
 }
 
+async fn resolve_fts_match(
+    conn: &libsql::Connection,
+    count_sql: &str,
+    where_binds: &[libsql::Value],
+    query_text: String,
+) -> AppResult<(String, i64)> {
+    async fn count(
+        conn: &libsql::Connection,
+        sql: &str,
+        query: &str,
+        where_binds: &[libsql::Value],
+    ) -> libsql::Result<i64> {
+        let binds = std::iter::once(libsql::Value::Text(query.to_owned()))
+            .chain(where_binds.iter().cloned())
+            .collect::<Vec<_>>();
+        let mut rows = conn.query(sql, binds).await?;
+        match rows.next().await? {
+            Some(row) => row.get(0),
+            None => Ok(0),
+        }
+    }
+
+    fn is_fts_syntax_error(error: &libsql::Error) -> bool {
+        matches!(error, libsql::Error::SqliteFailure(_, message)
+            if message.contains("fts5: syntax error")
+                || message.contains("unterminated string")
+                || message.contains("no such column:"))
+    }
+
+    fn search_error(error: libsql::Error) -> AppError {
+        if matches!(&error, libsql::Error::SqliteFailure(_, message)
+            if message.contains("no such table: __kdb_documents_fts"))
+        {
+            AppError::BadRequest("search index is missing; run reindex_fts and wait for completion".into())
+        } else {
+            AppError::Internal(format!("search count query failed: {error}"))
+        }
+    }
+
+    match count(conn, count_sql, &query_text, where_binds).await {
+        Ok(total) => Ok((query_text, total)),
+        Err(error) if is_fts_syntax_error(&error) => {
+            // Valid FTS expressions keep their operators. Retry malformed input as a phrase.
+            let literal = format!("\"{}\"", query_text.replace('"', "\"\""));
+            match count(conn, count_sql, &literal, where_binds).await {
+                Ok(total) => Ok((literal, total)),
+                Err(error) => Err(search_error(error)),
+            }
+        }
+        Err(error) => Err(search_error(error)),
+    }
+}
+
 async fn execute_query_fts(
     state: &AppState,
     db_path: &str,
@@ -748,6 +801,9 @@ async fn execute_query_fts(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("payload.search must be non-empty".to_string()))?;
+    if query_text.contains('\0') {
+        return Err(AppError::BadRequest("payload.search cannot contain NUL characters".into()));
+    }
 
     let observed_paths = observed_query_paths(&payload);
     if !observed_paths.is_empty() {
@@ -770,31 +826,6 @@ async fn execute_query_fts(
         document_user_scope(&payload)?,
     )?;
 
-    let mut count_binds = Vec::<libsql::Value>::with_capacity(1 + where_binds.len());
-    count_binds.push(libsql::Value::Text(query_text.clone()));
-    count_binds.extend(where_binds.clone());
-
-    let count_sql = format!(
-        "SELECT COUNT(*)
-         FROM __kdb_documents_fts
-         JOIN __kdb_documents d ON d.id = __kdb_documents_fts.id
-         WHERE __kdb_documents_fts.content MATCH ? AND {where_clause}"
-    );
-    let mut count_rows = conn
-        .query(&count_sql, count_binds)
-        .await
-        .map_err(|e| AppError::Internal(format!("search count query failed: {e}")))?;
-    let total_count = if let Some(row) = count_rows
-        .next()
-        .await
-        .map_err(|e| AppError::Internal(format!("search count row read failed: {e}")))?
-    {
-        row.get(0)
-            .map_err(|e| AppError::Internal(format!("search count row decode failed: {e}")))?
-    } else {
-        0
-    };
-
     let (limit, offset, page) = resolve_pagination_args(&payload, state.query_default_limit)?;
     let order_by = if payload.sort.is_some() {
         build_search_order_by(&payload.sort)?
@@ -802,83 +833,35 @@ async fn execute_query_fts(
         "_score ASC, _created_at DESC".to_string()
     };
 
+    let matching_rows = format!(
+        "FROM __kdb_documents_fts
+         JOIN __kdb_documents d ON d.id = __kdb_documents_fts.id
+         WHERE __kdb_documents_fts.content MATCH ? AND {where_clause}"
+    );
+    let count_sql = format!("SELECT COUNT(*) {matching_rows}");
+    let (query_text, total_count) =
+        resolve_fts_match(conn, &count_sql, &where_binds, query_text).await?;
+
     let mut data_binds = Vec::<libsql::Value>::with_capacity(3 + where_binds.len());
     data_binds.push(libsql::Value::Text(query_text));
     data_binds.extend(where_binds);
     data_binds.push(libsql::Value::Integer(limit));
     data_binds.push(libsql::Value::Integer(offset));
 
-    let sql = if state.response_include_system_timestamps && include_namespace {
-        format!(
-            "WITH matched AS (
-                SELECT json(d.data) AS data,
-                       d._user_id AS _user_id,
-                       d.collection AS _namespace,
-                       d._created_at AS _created_at,
-                       d._modified_at AS _modified_at,
-                       bm25(__kdb_documents_fts) AS _score,
-                       json(d._metadata) AS _metadata
-                FROM __kdb_documents_fts
-                JOIN __kdb_documents d ON d.id = __kdb_documents_fts.id
-                WHERE __kdb_documents_fts.content MATCH ? AND {where_clause}
-            )
-            SELECT data, _user_id, _namespace, _created_at, _modified_at, _score, _metadata
-            FROM matched
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?"
+    // Keep sort columns available independently of the response projection.
+    let sql = format!(
+        "WITH matched AS (
+            SELECT d.id, d.collection, d.data, d._user_id, d._metadata,
+                   d._created_at, d._modified_at, d._expires_at, d._size_bytes,
+                   d._expiry_behavior, bm25(__kdb_documents_fts) AS _score
+            {matching_rows}
         )
-    } else if state.response_include_system_timestamps {
-        format!(
-            "WITH matched AS (
-                SELECT json(d.data) AS data,
-                       d._user_id AS _user_id,
-                       d._created_at AS _created_at,
-                       d._modified_at AS _modified_at,
-                       bm25(__kdb_documents_fts) AS _score,
-                       json(d._metadata) AS _metadata
-                FROM __kdb_documents_fts
-                JOIN __kdb_documents d ON d.id = __kdb_documents_fts.id
-                WHERE __kdb_documents_fts.content MATCH ? AND {where_clause}
-            )
-            SELECT data, _user_id, _created_at, _modified_at, _score, _metadata
-            FROM matched
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?"
-        )
-    } else if include_namespace {
-        format!(
-            "WITH matched AS (
-                SELECT json(d.data) AS data,
-                       d._user_id AS _user_id,
-                       d.collection AS _namespace,
-                       bm25(__kdb_documents_fts) AS _score,
-                       json(d._metadata) AS _metadata
-                FROM __kdb_documents_fts
-                JOIN __kdb_documents d ON d.id = __kdb_documents_fts.id
-                WHERE __kdb_documents_fts.content MATCH ? AND {where_clause}
-            )
-            SELECT data, _user_id, _namespace, _score, _metadata
-            FROM matched
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?"
-        )
-    } else {
-        format!(
-            "WITH matched AS (
-                SELECT json(d.data) AS data,
-                       d._user_id AS _user_id,
-                       bm25(__kdb_documents_fts) AS _score,
-                       json(d._metadata) AS _metadata
-                FROM __kdb_documents_fts
-                JOIN __kdb_documents d ON d.id = __kdb_documents_fts.id
-                WHERE __kdb_documents_fts.content MATCH ? AND {where_clause}
-            )
-            SELECT data, _user_id, _score, _metadata
-            FROM matched
-            ORDER BY {order_by}
-            LIMIT ? OFFSET ?"
-        )
-    };
+        SELECT json(data), _user_id, collection, _created_at, _modified_at,
+               _score, json(_metadata)
+        FROM matched
+        ORDER BY {order_by}, id ASC
+        LIMIT ? OFFSET ?"
+    );
 
     let mut rows = conn
         .query(&sql, data_binds)
@@ -900,34 +883,25 @@ async fn execute_query_fts(
             .get(1)
             .map_err(|e| AppError::Internal(format!("search _user_id decode failed: {e}")))?;
         attach_document_user_id(&mut value, user_id);
-        let mut idx = 2;
         if include_namespace {
             let ns: String = row
-                .get(idx)
+                .get(2)
                 .map_err(|e| AppError::Internal(format!("search namespace decode failed: {e}")))?;
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("_namespace".to_string(), Value::String(ns));
             }
-            idx += 1;
         }
         if state.response_include_system_timestamps {
-            let created_at: Option<String> = row
-                .get(idx)
-                .map_err(|e| AppError::Internal(format!("search created_at decode failed: {e}")))?;
-            let modified_at: Option<String> = row.get(idx + 1).map_err(|e| {
+            let created_at: Option<String> = row.get(3).map_err(|e| {
+                AppError::Internal(format!("search created_at decode failed: {e}"))
+            })?;
+            let modified_at: Option<String> = row.get(4).map_err(|e| {
                 AppError::Internal(format!("search modified_at decode failed: {e}"))
             })?;
             attach_system_timestamps(&mut value, created_at, modified_at);
         }
         if include_metadata {
-            let metadata_index = if include_namespace {
-                if state.response_include_system_timestamps { 5 } else { 4 }
-            } else if state.response_include_system_timestamps {
-                4
-            } else {
-                3
-            };
-            let metadata: Option<String> = row.get(metadata_index).map_err(|e| {
+            let metadata: Option<String> = row.get(6).map_err(|e| {
                 AppError::Internal(format!("search metadata decode failed: {e}"))
             })?;
             if let Some(metadata) = metadata {
@@ -938,13 +912,8 @@ async fn execute_query_fts(
                 }
             }
         }
-        let score_idx = if state.response_include_system_timestamps {
-            idx + 2
-        } else {
-            idx
-        };
         let score: f64 = row
-            .get(score_idx)
+            .get(5)
             .map_err(|e| AppError::Internal(format!("search score decode failed: {e}")))?;
         if let Some(obj) = value.as_object_mut() {
             obj.insert("_search_score".to_string(), json!(score));

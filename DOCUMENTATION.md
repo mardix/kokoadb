@@ -625,6 +625,8 @@ Responses carry both shapes so clients can use either:
 
 Setting `KOKOADB_CACHE_TTL_SECS=0` disables the read cache entirely.
 
+Default and custom-TTL responses share a 64 MiB admission budget per instance, estimated from serialized JSON and cache key lengths. Entries larger than 2 MiB or that would exceed the shared budget are served without being cached. Existing entry-count limits still apply. The maintenance worker removes expired custom-TTL entries.
+
 Metrics queries use a separate cache controlled by `KOKOADB_METRIC_EVENTS_CACHE_TTL_SECS` (default 30s) with the same `payload.cache` semantics. Note that `metrics_ingest` does **not** invalidate the metrics cache on every ingest.
 
 Lookups have their own request-local cache — see [`cache_lookup`](#cache_lookup--request-local-reuse).
@@ -1643,6 +1645,12 @@ FTS mode requires `enable_fts_index` to be true for the database and a populated
 ```
 
 `_search_score` may only be used as a sort path during FTS mode. Archive flags are rejected in FTS mode.
+
+Valid FTS5 expressions retain their phrase, prefix, and Boolean operators. If FTS5 rejects the syntax, Kokoa retries the input as a quoted phrase. Punctuation is still handled by the FTS tokenizer, so phrase matching is based on tokens.
+
+When `search` and `filter` are supplied together, a live document must both match the FTS expression and satisfy the filter, as well as any namespace or `user_id` scope. The example above counts and returns only published articles matching both terms. `total_items` counts the combined matches before pagination. BM25 scores use the full FTS index's statistics.
+
+Search can sort by live system columns even if they are hidden in the response. Kokoa uses the document ID to break sort ties. Reindexing replaces the index contents in one transaction.
 
 #### Query with user attachments
 
@@ -5005,6 +5013,10 @@ Backups are compressed and catalogued in `__kdb_backup_catalog`. Retention is go
 
 These operations apply in `KOKOADB_STORAGE_MODE=s3`.
 
+Snapshot uploads stream from disk. Downloads stream to a temporary file and verify size and checksum when the manifest includes them before installing the file. Up to two snapshot jobs run concurrently per instance. Separate backup creation and restore paths can still buffer whole files.
+
+Async replication checks cold databases with short-lived read-only connections and promotes them to the managed connection cache only when it finds queued work. Recovery still checks local files for persisted replication jobs.
+
 | Operation | Required | Optional | Purpose |
 |---|---|---|---|
 | `load_db` | `db` | — | Preload/hydrate the database into the active instance. |
@@ -5075,6 +5087,32 @@ The background reaper cadence also snapshots active databases into the catalog. 
 | `cleanup_temp_artifacts` | Removes stale temp files under the data directory. |
 
 `get_system_stats` includes uptime, version, request totals, in-flight requests, read/write/admin/error counts, average and max latency, 5m/15m/30m/1h rolling windows, process memory, active database count and cap, background worker concurrency, and write queue usage.
+
+Both `system_memory` and `get_system_stats` also return `data.memory_breakdown`. Use it to investigate process-memory growth without changing cache settings, closing databases, or resetting counters:
+
+```json
+{"operation": "system_memory", "payload": {}}
+```
+
+| Breakdown field | Measurement |
+|---|---|
+| `sqlite.allocated_bytes.current` / `.peak` | Process-wide bytes reported by SQLite's memory allocator, including the internal system database. Peaks are not reset when queried. |
+| `sqlite.pagecache_overflow_bytes.current` / `.peak` | Page-cache allocations made outside SQLite's dedicated page-cache pool. These are a subset of SQLite allocation accounting, not additional memory to add to its total. |
+| `sqlite.allocation_count.current` / `.peak` | SQLite outstanding allocation counts, not bytes. |
+| `sqlite.per_connection_stats_available` | `false`: the public libSQL connection interface does not expose per-connection page-cache/statement-memory counters. No new connections are opened to sample memory. |
+| `response_cache.entries`, `.estimated_serialized_bytes` | Visible default-cache entries and their JSON payload sizes. Sampling reads shared cache entries without deep-copying responses. |
+| `response_cache.estimated_reserved_bytes`, `.estimated_byte_limit`, `.estimated_entry_byte_limit` | Shared cache admission accounting in estimated bytes, including cache keys. |
+| `response_cache.largest_entry_estimated_serialized_bytes` | Largest visible default-cache payload. |
+| `response_cache.ttl_override_entries`, `.ttl_override_estimated_serialized_bytes` | Retained custom-TTL cache entries, including expired entries not yet removed. |
+| `response_cache.expired_ttl_override_entries`, `.expired_ttl_override_estimated_serialized_bytes` | Expired-but-retained custom-TTL payloads. Sampling does not purge them. |
+| `pending_documents.entries`, `.estimated_serialized_bytes` | Documents retained for accepted-write previews. |
+| `outstanding_write_payloads.active`, `.current_bytes`, `.peak_bytes` | Estimated serialized payload sizes for tracked write requests waiting for channel capacity, queued, or executing. Unlike `write_queue.queued_total`, this includes executing requests. Reservations are released on completion, failure, or cancellation. |
+| `replication_backlog` | Number of fallback records staged in memory on the S3 backend and the capacities of their strings and backing vector, in bytes. Excludes on-disk replication jobs and batches already drained by the worker. `null` in local mode. |
+| `snapshot_buffers.active`, `.current_bytes`, `.peak_bytes` | Instrumented S3 snapshot transfers and 64 KiB hashing/copy buffers. Uploads stream from disk and may be active with zero tracked bytes because SDK buffers are outside this counter. |
+| `s3_upload_copies.active`, `.current_bytes`, `.peak_bytes` | Payload bytes reserved for copies made by ordinary S3 object uploads. Includes snapshots and other objects sent through this path. |
+| `s3_download_buffers.active`, `.current_bytes`, `.peak_bytes` | Completed S3 response-body buffers while converting them into owned vectors. Does not measure SDK buffers while a body is still being received. |
+
+The breakdown is diagnostic accounting, not a heap profiler or memory limit. JSON sizes exclude allocator overhead, map nodes, keys, spare capacity, and temporary clones. SQLite counters depend on the library's enabled memory accounting; unsupported status calls return `null`. Transfer counters cover the instrumented paths, not every backup/compression buffer, HTTP buffer, or query result. Peaks belong to each category independently and must not be summed. Concurrent work can change values during sampling. The categories do not reconcile exactly to RSS and cannot alone distinguish live allocations from allocator-retained memory. Do not interpret a low tracked total as proof that no leak exists.
 
 > These stats live **in memory and reset when the process restarts.** Use `snapshot_db_stats` / `system_snapshot_db_stats` for durable history.
 

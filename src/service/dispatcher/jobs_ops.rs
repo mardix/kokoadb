@@ -904,13 +904,14 @@ pub async fn process_fts_jobs_tick(state: &AppState) -> AppResult<usize> {
             Ok(v) => v,
             Err(_) => return Ok(0),
         };
-        Ok(process_next_fts_job_for_db(&state, &conn).await? as usize)
+        Ok(process_next_fts_job_for_db(&state, &db_path, &conn).await? as usize)
     })
     .await
 }
 
 async fn process_next_fts_job_for_db(
-    _state: &AppState,
+    state: &AppState,
+    db_path: &str,
     conn: &libsql::Connection,
 ) -> AppResult<bool> {
     let worker_id = format!("worker-{}", Uuid::new_v4().simple());
@@ -982,6 +983,7 @@ async fn process_next_fts_job_for_db(
 
     match result_payload {
         Ok(payload) => {
+            invalidate_read_cache_scope(state, db_path, None);
             conn.execute(
                 "UPDATE __kdb_jobs
                  SET status='completed', payload_json=?, worker_id=NULL,

@@ -19,6 +19,8 @@ pub trait ObjectStore: Send + Sync {
     async fn exists(&self, key: &str) -> AppResult<bool>;
     async fn get(&self, key: &str) -> AppResult<Option<(Vec<u8>, String)>>;
     async fn put(&self, key: &str, data: &[u8]) -> AppResult<String>;
+    async fn get_stream(&self, key: &str) -> AppResult<Option<aws_sdk_s3::primitives::ByteStream>>;
+    async fn put_file(&self, key: &str, path: &std::path::Path) -> AppResult<()>;
     async fn delete(&self, key: &str) -> AppResult<()>;
     async fn list_prefix(&self, prefix: &str) -> AppResult<Vec<String>>;
     async fn put_if_match(
@@ -262,45 +264,14 @@ impl AwsS3ObjectStore {
             .collect()
             .await
             .map_err(|e| AppError::Internal(format!("s3 body read failed: {e}")))?
-            .into_bytes()
-            .to_vec();
+            .into_bytes();
+        let _memory = crate::diagnostics::S3_DOWNLOAD_BUFFERS.track(bytes.len() as u64);
+        let bytes = bytes.to_vec();
         let etag = Self::normalize_etag(out.e_tag.as_deref());
         Ok(Some((bytes, etag)))
     }
-}
 
-#[async_trait]
-impl ObjectStore for AwsS3ObjectStore {
-    async fn exists(&self, key: &str) -> AppResult<bool> {
-        let object_key = self.object_key(key);
-        match self
-            .client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(object_key.as_str())
-            .send()
-            .await
-        {
-            Ok(_) => Ok(true),
-            Err(aws_sdk_s3::error::SdkError::ServiceError(se)) => {
-                let (code, message) = Self::error_code_message(se.err());
-                if code == "NotFound" || code == "NoSuchKey" || message.contains("404") {
-                    Ok(false)
-                } else {
-                    Err(AppError::Internal(format!(
-                        "s3 head_object failed: code={code} message={message} bucket={} key={}",
-                        self.bucket, object_key
-                    )))
-                }
-            }
-            Err(e) => Err(AppError::Internal(format!(
-                "s3 head_object transport/config error: bucket={} key={} err={}",
-                self.bucket, object_key, e
-            ))),
-        }
-    }
-
-    async fn get(&self, key: &str) -> AppResult<Option<(Vec<u8>, String)>> {
+    async fn get_object(&self, key: &str) -> AppResult<Option<aws_sdk_s3::operation::get_object::GetObjectOutput>> {
         let object_key = self.object_key(key);
         let mut attempt: usize = 0;
         let out = loop {
@@ -339,25 +310,17 @@ impl ObjectStore for AwsS3ObjectStore {
             }
         };
 
-        let bytes = out
-            .body
-            .collect()
-            .await
-            .map_err(|e| AppError::Internal(format!("s3 body read failed: {e}")))?
-            .into_bytes()
-            .to_vec();
-        let etag = Self::normalize_etag(out.e_tag.as_deref());
-        Ok(Some((bytes, etag)))
+        Ok(Some(out))
     }
 
-    async fn put(&self, key: &str, data: &[u8]) -> AppResult<String> {
+    async fn put_object(&self, key: &str, body: aws_sdk_s3::primitives::ByteStream) -> AppResult<String> {
         let object_key = self.object_key(key);
         let out = match self
             .client
             .put_object()
             .bucket(&self.bucket)
             .key(object_key.as_str())
-            .body(aws_sdk_s3::primitives::ByteStream::from(data.to_vec()))
+            .body(body)
             .send()
             .await
         {
@@ -377,6 +340,70 @@ impl ObjectStore for AwsS3ObjectStore {
             }
         };
         Ok(Self::normalize_etag(out.e_tag.as_deref()))
+    }
+}
+
+#[async_trait]
+impl ObjectStore for AwsS3ObjectStore {
+    async fn exists(&self, key: &str) -> AppResult<bool> {
+        let object_key = self.object_key(key);
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(object_key.as_str())
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(aws_sdk_s3::error::SdkError::ServiceError(se)) => {
+                let (code, message) = Self::error_code_message(se.err());
+                if code == "NotFound" || code == "NoSuchKey" || message.contains("404") {
+                    Ok(false)
+                } else {
+                    Err(AppError::Internal(format!(
+                        "s3 head_object failed: code={code} message={message} bucket={} key={}",
+                        self.bucket, object_key
+                    )))
+                }
+            }
+            Err(e) => Err(AppError::Internal(format!(
+                "s3 head_object transport/config error: bucket={} key={} err={}",
+                self.bucket, object_key, e
+            ))),
+        }
+    }
+
+    async fn get(&self, key: &str) -> AppResult<Option<(Vec<u8>, String)>> {
+        let Some(out) = self.get_object(key).await? else {
+            return Ok(None);
+        };
+        let bytes = out
+            .body
+            .collect()
+            .await
+            .map_err(|e| AppError::Internal(format!("s3 body read failed: {e}")))?
+            .into_bytes();
+        let _memory = crate::diagnostics::S3_DOWNLOAD_BUFFERS.track(bytes.len() as u64);
+        let bytes = bytes.to_vec();
+        let etag = Self::normalize_etag(out.e_tag.as_deref());
+        Ok(Some((bytes, etag)))
+    }
+
+    async fn put(&self, key: &str, data: &[u8]) -> AppResult<String> {
+        let _memory = crate::diagnostics::S3_UPLOAD_COPIES.track(data.len() as u64);
+        self.put_object(key, aws_sdk_s3::primitives::ByteStream::from(data.to_vec())).await
+    }
+
+    async fn get_stream(&self, key: &str) -> AppResult<Option<aws_sdk_s3::primitives::ByteStream>> {
+        Ok(self.get_object(key).await?.map(|out| out.body))
+    }
+
+    async fn put_file(&self, key: &str, path: &std::path::Path) -> AppResult<()> {
+        let body = aws_sdk_s3::primitives::ByteStream::from_path(path).await
+            .map_err(|e| AppError::Internal(format!("open snapshot upload stream failed: {e}")))?;
+        self.put_object(key, body).await?;
+        Ok(())
     }
 
     async fn get_range_limited(

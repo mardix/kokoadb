@@ -610,11 +610,14 @@ async fn system_memory(state: &AppState) -> AppResult<GatewayResponse> {
         }));
     }
     let mem = memory_stats();
+    let mut memory_breakdown = state.memory_breakdown();
+    memory_breakdown["replication_backlog"] = json!(state.db_manager.replication_backlog().await);
     Ok(GatewayResponse::ok(Some(json!({
         "process_memory": {
             "physical_bytes": mem.as_ref().map(|m| m.physical_mem),
             "virtual_bytes": mem.as_ref().map(|m| m.virtual_mem)
         },
+        "memory_breakdown": memory_breakdown,
         "system_stats": state.system_stats_snapshot_json(),
         "active_db_count": state.db_manager.list_active_db_paths().len(),
         "max_active_dbs": state.db_manager.max_active_dbs(),

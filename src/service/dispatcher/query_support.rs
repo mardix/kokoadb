@@ -1120,13 +1120,16 @@ fn sort_expr(path: &str, allow_search_score: bool) -> AppResult<String> {
         "_search_score" => Err(AppError::BadRequest(
             "_search_score sort is only available when payload.search is used".to_string(),
         )),
+        "_txn_id" if allow_search_score => Err(AppError::BadRequest(
+            "_txn_id sorting is only available for archived documents".to_string(),
+        )),
         "id" | "_id" => Ok("id".to_string()),
         "_namespace" => Ok("collection".to_string()),
         "_created_at" | "_modified_at" | "_expires_at" | "_size_bytes" | "_expiry_behavior"
         | "_txn_id" => Ok(path.to_string()),
         _ => {
             validate_projection_path(path, "sort")?;
-            Ok(format!("json_extract(data, '$.{path}')"))
+            Ok(format!("json_extract(data, '$.{}')", path.replace('\'', "''")))
         }
     }
 }
